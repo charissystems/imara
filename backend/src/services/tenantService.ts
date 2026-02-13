@@ -189,14 +189,24 @@ export class TenantService {
     }
 
     async checkHealth(tenantId: string) {
+        // Fetch tenant details first
+        const tenant = await this.tenantRepo.findById(tenantId);
+        if (!tenant) {
+            throw new Error(`Tenant with ID ${tenantId} not found`);
+        }
+
         // The SQL function returns a JSONB object
         const result = await pool.query('SELECT check_tenant_health($1) as health', [tenantId]);
         
+        if (!result.rows[0]) {
+            throw new Error('Health check returned no results');
+        }
+        
         // Log health check as an audit event
         await this.logAuditEvent(
-            (await this.tenantRepo.findById(tenantId))?.schema_name || 'unknown',
+            tenant.schema_name,
             'HEALTH_CHECK',
-            undefined,
+            tenant.code,
             result.rows[0].health
         );
 

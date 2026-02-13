@@ -1,7 +1,6 @@
 // src/middleware/audit.ts
 import { Context, Next } from 'hono';
 import { Env } from './types';
-import { getTenantDb } from '../config/database';
 import { appLogger } from './logger';
 
 /**
@@ -30,10 +29,8 @@ export class AuditLogger {
 
     async log(auditLog: AuditLog): Promise<void> {
         try {
-            const db = getTenantDb(this.schemaName);
-            
-            // For now, log to application logger
-            // In production, could write to a dedicated audit table per schema
+            // Log to application logger
+            // TODO: In production, persist to dedicated audit table per schema
             appLogger.info('Audit event', {
                 schema: this.schemaName,
                 table: auditLog.tableName,
