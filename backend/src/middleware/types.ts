@@ -2,6 +2,7 @@
 import { Hono, Context } from 'hono';
 import { Kysely } from 'kysely';
 import { TenantDatabase, Tenant } from '../database/types';
+import { AuditLogger } from './audit';
 
 /**
  * Context variables available across all routes
@@ -29,6 +30,9 @@ export type Variables = {
         memberId?: string;
         staffId?: string;
     };
+    
+    // Audit logger for tracking changes
+    auditLogger?: AuditLogger;
 };
 
 /**

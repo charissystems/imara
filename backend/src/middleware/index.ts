@@ -13,6 +13,10 @@ export { tenantResolver, clearTenantCache } from './tenantResolver';
 // Authentication Middleware
 export { authMiddleware, requireAuth } from './auth';
 
+// Audit Middleware
+export { auditMiddleware, AuditLogger } from './audit';
+export type { AuditLog } from './audit';
+
 // Optional Middleware
 export { corsMiddleware } from './cors';
 export { validate, getValidatedData, commonSchemas } from './validation';

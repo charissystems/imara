@@ -225,10 +225,132 @@ app.get('/tenants/:id/health', async (c) => {
 });
 
 /**
- * GET /admin/tenants/:id/stats
- * Get tenant usage statistics
+ * GET /admin/tenants/:id/audit
+ * Get audit log for a specific tenant
  */
-app.get('/tenants/:id/stats', async (c) => {
+app.get('/tenants/:id/audit', async (c) => {
+    const id = c.req.param('id');
+    const limit = parseInt(c.req.query('limit') || '50', 10);
+    const operation = c.req.query('operation');
+
+    const tenant = await publicDb
+        .selectFrom('tenants')
+        .select(['schema_name'])
+        .where('id', '=', id)
+        .executeTakeFirst();
+
+    if (!tenant) {
+        throw new NotFoundError('Tenant', id);
+    }
+
+    const { TenantRepository } = await import('../repositories/tenantRepository');
+    const repo = new TenantRepository(publicDb);
+
+    let logs = await repo.getAuditLogs(tenant.schema_name, limit);
+
+    // Filter by operation if specified
+    if (operation) {
+        logs = logs.filter(log => log.operation === operation.toUpperCase());
+    }
+
+    return c.json({
+        success: true,
+        data: logs,
+        count: logs.length,
+        tenantId: id,
+        schemaName: tenant.schema_name
+    });
+});
+
+/**
+ * GET /admin/tenants/audit
+ * Get audit logs for all tenants with optional filtering
+ */
+app.get('/audit', async (c) => {
+    const limit = parseInt(c.req.query('limit') || '100', 10);
+    const operation = c.req.query('operation');
+    const schema = c.req.query('schema');
+    const since = c.req.query('since'); // ISO datetime string
+
+    let query = publicDb
+        .selectFrom('tenant_audit_log')
+        .selectAll()
+        .orderBy('performed_at', 'desc')
+        .limit(limit);
+
+    if (operation) {
+        query = query.where('operation', '=', operation.toUpperCase());
+    }
+
+    if (schema) {
+        query = query.where('schema_name', '=', schema);
+    }
+
+    if (since) {
+        const sinceDate = new Date(since);
+        query = query.where('performed_at', '>=', sinceDate);
+    }
+
+    const logs = await query.execute();
+
+    return c.json({
+        success: true,
+        data: logs,
+        count: logs.length,
+        filters: { operation, schema, since }
+    });
+});
+
+/**
+ * GET /admin/audit-summary
+ * Get summary statistics of audit activity
+ */
+app.get('/audit-summary', async (c) => {
+    const days = parseInt(c.req.query('days') || '7', 10);
+
+    const sinceDate = new Date();
+    sinceDate.setDate(sinceDate.getDate() - days);
+
+    const operationCounts = await publicDb
+        .selectFrom('tenant_audit_log')
+        .select(['operation'])
+        .select(eb => eb.fn.count('id').as('count'))
+        .where('performed_at', '>=', sinceDate)
+        .groupBy('operation')
+        .execute();
+
+    const totalTenantOperations = await publicDb
+        .selectFrom('tenant_audit_log')
+        .select(eb => eb.fn.count('id').as('count'))
+        .where('performed_at', '>=', sinceDate)
+        .executeTakeFirst();
+
+    const failedOperations = await publicDb
+        .selectFrom('tenant_audit_log')
+        .select(eb => eb.fn.count('id').as('count'))
+        .where('performed_at', '>=', sinceDate)
+        .where('error_message', 'is not', null)
+        .executeTakeFirst();
+
+    return c.json({
+        success: true,
+        data: {
+            period: {
+                days,
+                since: sinceDate,
+                until: new Date()
+            },
+            totalOperations: parseInt(totalTenantOperations?.count.toString() || '0', 10),
+            failedOperations: parseInt(failedOperations?.count.toString() || '0', 10),
+            byOperation: operationCounts.map(row => ({
+                operation: row.operation,
+                count: row.count
+            }))
+        }
+    });
+});
+
+
     const id = c.req.param('id');
 
     const tenant = await publicDb
