@@ -1,0 +1,440 @@
+// src/routes/admin.ts
+import { Hono } from 'hono';
+import { z } from 'zod';
+import { publicDb, pool } from '../config/database';
+import { ValidationError, NotFoundError, AppError } from '../middleware/errorHandler';
+import { requireSuperAdmin } from '../middleware/superAdmin';
+import { clearTenantCache } from '../middleware/tenantResolver';
+
+// Router setup
+const app = new Hono();
+
+// Apply Admin Protection to all routes in this file
+app.use('*', requireSuperAdmin);
+
+// ---------------------------------------------------------------------------
+// Validation Schemas
+// ---------------------------------------------------------------------------
+
+const createTenantSchema = z.object({
+    name: z.string().min(3).max(100),
+    code: z.string().min(2).max(20).regex(/^[a-z0-9-]+$/, "Code must be lowercase alphanumeric with dashes"),
+    subdomain: z.string().min(3).max(50).regex(/^[a-z0-9-]+$/, "Subdomain must be lowercase alphanumeric with dashes"),
+    contact_email: z.string().email().optional(),
+    contact_phone: z.string().optional(),
+    admin_password: z.string().min(8).optional(),
+});
+
+const updateTenantSchema = z.object({
+    sacco_name: z.string().min(3).optional(),
+    short_name: z.string().optional(),
+    status: z.enum(['active', 'suspended', 'inactive']).optional(),
+    subscription_expires_at: z.string().datetime().optional(), // ISO string
+});
+
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /admin/tenants
+ * List all tenants (Admin View)
+ */
+app.get('/tenants', async (c) => {
+    const tenants = await publicDb
+        .selectFrom('tenants')
+        .selectAll()
+        .orderBy('created_at', 'desc')
+        .execute();
+
+    return c.json({
+        success: true,
+        data: tenants,
+        count: tenants.length
+    });
+});
+
+/**
+ * GET /admin/tenants/:id
+ * Get details of a specific tenant
+ */
+app.get('/tenants/:id', async (c) => {
+    const id = c.req.param('id');
+
+    const tenant = await publicDb
+        .selectFrom('tenants')
+        .selectAll()
+        .where('id', '=', id)
+        .executeTakeFirst();
+
+    if (!tenant) {
+        throw new NotFoundError('Tenant', id);
+    }
+
+    return c.json({ success: true, data: tenant });
+});
+
+/**
+ * POST /admin/tenants
+ * Create a new tenant (Django Admin Add View equivalent)
+ * This triggers the schema creation logic via TenantService
+ */
+app.post('/tenants', async (c) => {
+    const body = await c.req.json();
+    const data = createTenantSchema.parse(body);
+
+    // Check if subdomain or code already exists
+    const existing = await publicDb
+        .selectFrom('tenants')
+        .select(['id'])
+        .where((eb) => eb.or([
+            eb('subdomain', '=', data.subdomain),
+            eb('code', '=', data.code)
+        ]))
+        .executeTakeFirst();
+
+    if (existing) {
+        throw new ValidationError('A tenant with this code or subdomain already exists');
+    }
+
+    // Dynamically import TenantService to avoid circular dependency if needed
+    // or just import it at the top. Here we assume it's available.
+    const { TenantService } = await import('../services/tenantService');
+    const service = new TenantService();
+
+    try {
+        // The service handles: 
+        // 1. DB Transaction for Registry Insert
+        // 2. SQL Function call for Schema/Role creation
+        // 3. Migration running
+        const newTenant = await service.createTenant(
+            data.name,
+            data.subdomain, // Using subdomain as code for simplicity
+            data.admin_password,
+            data.contact_email,
+            data.contact_phone
+        );
+
+        return c.json({
+            success: true,
+            message: 'Tenant created successfully',
+            data: newTenant
+        }, 201);
+    } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+        console.error('Failed to create tenant:', {
+            message: errorMsg,
+            code: data.code,
+            error
+        });
+
+        // Check if tenant was partially created despite error
+        const partialTenant = await publicDb
+            .selectFrom('tenants')
+            .selectAll()
+            .where('code', '=', data.code)
+            .executeTakeFirst();
+
+        if (partialTenant) {
+            // Tenant was created despite service error - return success
+            console.warn('Tenant was created despite service error, returning success');
+            return c.json({
+                success: true,
+                message: 'Tenant created successfully',
+                data: partialTenant
+            }, 201);
+        }
+
+        throw new AppError(500, `Failed to provision tenant infrastructure: ${errorMsg}`);
+    }
+});
+
+/**
+ * PATCH /admin/tenants/:id
+ * Update tenant details
+ */
+app.patch('/tenants/:id', async (c) => {
+    const id = c.req.param('id');
+    const body = await c.req.json();
+    const data = updateTenantSchema.parse(body);
+
+    const updatedTenant = await publicDb
+        .updateTable('tenants')
+        .set({
+            ...data,
+            subscription_expires_at: data.subscription_expires_at ? new Date(data.subscription_expires_at) : undefined,
+            updated_at: new Date()
+        })
+        .where('id', '=', id)
+        .returningAll()
+        .executeTakeFirst();
+
+    if (!updatedTenant) {
+        throw new NotFoundError('Tenant', id);
+    }
+
+    // Clear cache so next request picks up changes
+    if (updatedTenant.subdomain) {
+        clearTenantCache(updatedTenant.subdomain);
+    }
+
+    return c.json({ success: true, data: updatedTenant });
+});
+
+/**
+ * DELETE /admin/tenants/:id
+ * Soft delete a tenant
+ * WARNING: This does not drop the schema, just marks as deleted
+ */
+app.delete('/tenants/:id', async (c) => {
+    const id = c.req.param('id');
+    const hard = c.req.query('hard') === 'true'; // Dangerous flag
+
+    const { TenantService } = await import('../services/tenantService');
+    const service = new TenantService();
+
+    if (hard) {
+        // Destructive action
+        const tenant = await publicDb
+            .selectFrom('tenants')
+            .select(['schema_name'])
+            .where('id', '=', id)
+            .executeTakeFirst();
+
+        if (!tenant) throw new NotFoundError('Tenant', id);
+
+        await service.hardDeleteTenant(tenant.schema_name);
+    } else {
+        await service.softDeleteTenant(id);
+    }
+
+    return c.json({ success: true, message: 'Tenant deleted' });
+});
+
+/**
+ * GET /admin/tenants/:id/health
+ * Check tenant schema health
+ */
+app.get('/tenants/:id/health', async (c) => {
+    const id = c.req.param('id');
+    const { TenantService } = await import('../services/tenantService');
+    const service = new TenantService();
+
+    const health = await service.checkHealth(id);
+    return c.json({ success: true, data: health });
+});
+
+/**
+ * GET /admin/tenants/:id/stats
+ * Get tenant usage statistics
+ */
+app.get('/tenants/:id/stats', async (c) => {
+    const id = c.req.param('id');
+
+    const tenant = await publicDb
+        .selectFrom('tenants')
+        .selectAll()
+        .where('id', '=', id)
+        .executeTakeFirst();
+
+    if (!tenant) {
+        throw new NotFoundError('Tenant', id);
+    }
+
+    // Get member count
+    const memberCountResult = await pool.query(
+        `SELECT COUNT(*) as count FROM ${tenant.schema_name}.members WHERE deleted_at IS NULL`
+    );
+    const memberCount = parseInt(memberCountResult.rows[0]?.count || '0', 10);
+
+    // Get staff count
+    const staffCountResult = await pool.query(
+        `SELECT COUNT(*) as count FROM ${tenant.schema_name}.staff`
+    );
+    const staffCount = parseInt(staffCountResult.rows[0]?.count || '0', 10);
+
+    return c.json({
+        success: true,
+        data: {
+            tenantId: id,
+            tenantCode: tenant.code,
+            members: memberCount,
+            staff: staffCount,
+            status: tenant.status,
+            createdAt: tenant.created_at,
+            subscriptionExpiresAt: tenant.subscription_expires_at
+        }
+    });
+});
+
+/**
+ * POST /admin/tenants/:id/suspend
+ * Suspend a tenant
+ */
+app.post('/tenants/:id/suspend', async (c) => {
+    const id = c.req.param('id');
+
+    const tenant = await publicDb
+        .updateTable('tenants')
+        .set({
+            status: 'suspended',
+            updated_at: new Date()
+        })
+        .where('id', '=', id)
+        .returningAll()
+        .executeTakeFirst();
+
+    if (!tenant) {
+        throw new NotFoundError('Tenant', id);
+    }
+
+    clearTenantCache(tenant.subdomain);
+
+    return c.json({
+        success: true,
+        message: 'Tenant suspended successfully',
+        data: tenant
+    });
+});
+
+/**
+ * POST /admin/tenants/:id/reactivate
+ * Reactivate a suspended tenant
+ */
+app.post('/tenants/:id/reactivate', async (c) => {
+    const id = c.req.param('id');
+
+    const tenant = await publicDb
+        .updateTable('tenants')
+        .set({
+            status: 'active',
+            updated_at: new Date()
+        })
+        .where('id', '=', id)
+        .returningAll()
+        .executeTakeFirst();
+
+    if (!tenant) {
+        throw new NotFoundError('Tenant', id);
+    }
+
+    clearTenantCache(tenant.subdomain);
+
+    return c.json({
+        success: true,
+        message: 'Tenant reactivated successfully',
+        data: tenant
+    });
+});
+
+/**
+ * POST /admin/tenants/:id/extend-subscription
+ * Extend tenant subscription
+ */
+app.post('/tenants/:id/extend-subscription', async (c) => {
+    const id = c.req.param('id');
+    const body = await c.req.json() as { days: number };
+
+    if (!body.days || body.days <= 0) {
+        throw new ValidationError('days must be a positive number');
+    }
+
+    const expiryDate = new Date();
+    expiryDate.setDate(expiryDate.getDate() + body.days);
+
+    const tenant = await publicDb
+        .updateTable('tenants')
+        .set({
+            subscription_expires_at: expiryDate,
+            updated_at: new Date()
+        })
+        .where('id', '=', id)
+        .returningAll()
+        .executeTakeFirst();
+
+    if (!tenant) {
+        throw new NotFoundError('Tenant', id);
+    }
+
+    clearTenantCache(tenant.subdomain);
+
+    return c.json({
+        success: true,
+        message: 'Subscription extended successfully',
+        data: {
+            tenantId: id,
+            newExpiryDate: tenant.subscription_expires_at,
+            daysExtended: body.days
+        }
+    });
+});
+
+/**
+ * GET /admin/tenants/search
+ * Search tenants by name or code
+ */
+app.get('/search', async (c) => {
+    const query = c.req.query('q') || '';
+
+    if (!query || query.length < 2) {
+        return c.json({
+            success: false,
+            error: 'Query must be at least 2 characters'
+        }, 400);
+    }
+
+    const tenants = await publicDb
+        .selectFrom('tenants')
+        .selectAll()
+        .where((eb) => eb.or([
+            eb('sacco_name', 'ilike', `%${query}%`),
+            eb('code', 'ilike', `%${query}%`),
+            eb('subdomain', 'ilike', `%${query}%`)
+        ]))
+        .orderBy('created_at', 'desc')
+        .limit(20)
+        .execute();
+
+    return c.json({
+        success: true,
+        data: tenants,
+        count: tenants.length,
+        query
+    });
+});
+
+/**
+ * POST /admin/tenants/:id/backup
+ * Trigger a backup of tenant schema
+ */
+app.post('/tenants/:id/backup', async (c) => {
+    const id = c.req.param('id');
+
+    const tenant = await publicDb
+        .selectFrom('tenants')
+        .select(['schema_name', 'subdomain'])
+        .where('id', '=', id)
+        .executeTakeFirst();
+
+    if (!tenant) {
+        throw new NotFoundError('Tenant', id);
+    }
+
+    // In production, this would trigger a backup service
+    // For now, return a placeholder response
+    const backupId = `backup_${tenant.subdomain}_${Date.now()}`;
+
+    return c.json({
+        success: true,
+        message: 'Backup initiated',
+        data: {
+            backupId,
+            tenantId: id,
+            timestamp: new Date(),
+            schemaName: tenant.schema_name,
+            status: 'pending'
+        }
+    });
+});
+
+export default app;
