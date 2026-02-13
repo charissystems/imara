@@ -48,6 +48,6 @@ CREATE TABLE IF NOT EXISTS template.transactions(
 
 -- INDEXES
 CREATE INDEX IF NOT EXISTS transactions_member_idx ON template.transactions(member_id) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS_transactions_accounts_idx ON template.transactions(debit_account_id, credit_account_id) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS transactions_accounts_idx ON template.transactions(debit_account_id, credit_account_id) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS transactions_date_idx ON template.transactions(transaction_date) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS transactions_period_idx ON template.transactions(financial_period_id) WHERE deleted_at IS NULL;

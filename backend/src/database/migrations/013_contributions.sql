@@ -39,4 +39,4 @@ CREATE UNIQUE INDEX IF NOT EXISTS contributions_code_unique ON template.contribu
 CREATE TRIGGER trigger_contributions_updated_at
     BEFORE UPDATE ON template.contributions
     FOR EACH ROW
-    EXECUTE FUNCTION template.update_updated_at_column();
+    EXECUTE FUNCTION public.update_updated_at_column();
