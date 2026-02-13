@@ -350,7 +350,11 @@ app.get('/audit-summary', async (c) => {
     });
 });
 
-
+/**
+ * GET /admin/tenants/:id/stats
+ * Get tenant usage statistics
+ */
+app.get('/tenants/:id/stats', async (c) => {
     const id = c.req.param('id');
 
     const tenant = await publicDb

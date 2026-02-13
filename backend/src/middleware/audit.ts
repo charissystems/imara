@@ -44,7 +44,8 @@ export class AuditLogger {
             // Future: Persist to public.audit_events or tenant_audit_tables
             // await db.insertInto('audit_log').values({...}).execute();
         } catch (error) {
-            appLogger.error('Failed to log audit event', { error });
+            const err = error instanceof Error ? error : new Error(String(error));
+            appLogger.error('Failed to log audit event', err);
             // Don't throw - auditing failure shouldn't break the main operation
         }
     }

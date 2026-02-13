@@ -29,7 +29,7 @@ export class TenantService {
                     schema_name: schemaName,
                     tenant_code: tenantCode || null,
                     operation,
-                    details: details || null,
+                    details: details ? JSON.stringify(details) : null,
                     error_message: errorMessage || null,
                     // performed_by defaults to current_user in DB
                     // performed_at defaults to now() in DB
