@@ -1,7 +1,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { pool } from '../config/database';
+import { getPool } from '../config/database';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -21,12 +21,23 @@ export class MigrationRunner {
             return;
         }
 
-        const client = await pool.connect();
+        const client = await getPool().connect();
         try {
             for (const file of files) {
                 console.log(`  [PUBLIC] Executing ${file.name}`);
                 const sql = await fs.readFile(file.path, 'utf-8');
-                await client.query(sql);
+                try {
+                    await client.query(sql);
+                } catch (error: any) {
+                    // Skip "already exists" errors (code 42P07) and constraint exists (42710)
+                    // - 42P07: relation already exists
+                    // - 42710: constraint already exists
+                    if (error.code === '42P07' || error.code === '42710') {
+                        console.log(`  [PUBLIC] Skipping ${file.name} (already exists)`);
+                    } else {
+                        throw error;
+                    }
+                }
             }
             console.log('✅ Public Schema Migrations Completed.');
         } catch (error) {
@@ -51,7 +62,7 @@ export class MigrationRunner {
             return;
         }
 
-        const client = await pool.connect();
+        const client = await getPool().connect();
 
         try {
             for (const file of files) {

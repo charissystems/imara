@@ -1,6 +1,5 @@
-import { publicDb, pool } from '../config/database';
+import { publicDb, getPool } from '../config/database';
 import { MigrationRunner } from '../utils/migrationRunner';
-import { Tenant } from '../database/types';
 import { TenantRepository } from '../repositories/tenantRepository';
 
 export class TenantService {
@@ -62,7 +61,7 @@ export class TenantService {
             //    - INSERT into public.tenants (atomic with schema creation)
             //    - Audit Logging
             
-            const result = await pool.query(`
+            const result = await getPool().query(`
                 SELECT create_tenant_with_security(
                     $1::varchar, -- schema_name
                     $2::varchar, -- tenant_code (using subdomain as code)
@@ -135,7 +134,7 @@ export class TenantService {
             // - UPDATE public.tenants: mark as deleted_at, status = 'inactive'
             // - REVOKE login capability from role
             // - Audit logging (via SQL function)
-            await pool.query('SELECT soft_delete_tenant($1)', [tenantId]);
+            await getPool().query('SELECT soft_delete_tenant($1)', [tenantId]);
 
             // Log in application layer as well
             await this.logAuditEvent(
@@ -160,7 +159,7 @@ export class TenantService {
         try {
             // WARNING: Destructive - Physically drops schema and role
             // Use soft_delete_tenant() for normal operations
-            await pool.query('SELECT drop_tenant_schema($1)', [schemaName]);
+            await getPool().query('SELECT drop_tenant_schema($1)', [schemaName]);
 
             // Log the hard delete
             await this.logAuditEvent(
@@ -196,7 +195,7 @@ export class TenantService {
         }
 
         // The SQL function returns a JSONB object
-        const result = await pool.query('SELECT check_tenant_health($1) as health', [tenantId]);
+        const result = await getPool().query('SELECT check_tenant_health($1) as health', [tenantId]);
         
         if (!result.rows[0]) {
             throw new Error('Health check returned no results');
