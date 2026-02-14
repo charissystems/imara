@@ -11,6 +11,9 @@ import {
 import { StaffRepository } from '../repositories/staffRepository';
 import { AuthRepository } from '../repositories/authRepository';
 import { AuthService } from '../services/authService';
+import { PasswordResetService } from '../services/passwordResetService';
+import { TwoFactorService } from '../services/twoFactorService';
+import { getTenantDb } from '../config/database';
 import { appLogger } from '../middleware/logger';
 
 export const authRoutes = new Hono<Env>();
@@ -127,6 +130,27 @@ authRoutes.post('/login', validate(loginSchema), async (c) => {
 
         // Update last login
         await authRepo.updateLastLogin(staff.id);
+
+        // Check if 2FA is enabled
+        if (credentials.two_factor_enabled) {
+            // Return a partial response that requires 2FA verification
+            const tempToken = await authService.generateAccessToken(staff);
+            return c.json({
+                success: true,
+                data: {
+                    requiresTwoFactor: true,
+                    tempToken,
+                    staff: {
+                        id: staff.id,
+                        email: staff.email,
+                    },
+                },
+                meta: {
+                    message: 'Two-factor authentication required',
+                    tenant: tenantCode,
+                },
+            });
+        }
 
         // Generate tokens
         const accessToken = await authService.generateAccessToken(staff);
@@ -391,31 +415,21 @@ authRoutes.post(
 
 /**
  * POST /auth/forgot-password
- * Request a password reset link
- * TODO: Requires a password_reset_tokens table or Redis-based token store.
- *       The staff_credentials table does not have reset_token columns.
- *       For now, this endpoint validates the email and returns a stub response.
+ * Request a password reset link (sent via email)
  */
 authRoutes.post('/forgot-password', validate(forgotPasswordSchema), async (c) => {
     try {
         const data = getValidatedData<z.infer<typeof forgotPasswordSchema>>(c);
-        const { schema_name } = c.get('tenant')!;
+        const { schema_name, sacco_name } = c.get('tenant')!;
+        const db = c.get('db')!;
 
-        const staffRepo = new StaffRepository(schema_name);
+        const resetService = new PasswordResetService(db, schema_name);
+        const result = await resetService.requestReset(data.email, sacco_name);
 
-        // Find staff by email (don't reveal whether email exists)
-        const staff = await staffRepo.findByEmail(data.email);
-
-        if (staff) {
-            // TODO: Generate token, store in separate table/Redis, send via email
-            appLogger.info('Password reset requested', { staffId: staff.id });
-        }
-
-        // Always return same response to prevent email enumeration
         return c.json({
             success: true,
             meta: {
-                message: 'If the email is registered, a reset link has been sent.',
+                message: result.message,
             },
         });
     } catch (error) {
@@ -425,17 +439,284 @@ authRoutes.post('/forgot-password', validate(forgotPasswordSchema), async (c) =>
 
 /**
  * POST /auth/reset-password
- * Reset password using reset token
- * TODO: Implement once password_reset_tokens table is added.
+ * Reset password using a valid reset token
  */
 authRoutes.post('/reset-password', validate(resetPasswordSchema), async (c) => {
-    // TODO: Look up token in password_reset_tokens table, validate expiry,
-    //       hash new password, call authRepo.updatePassword(), delete token.
-    return c.json({
-        success: false,
-        error: {
-            code: 'NOT_IMPLEMENTED',
-            message: 'Password reset is not yet available. Contact an administrator.',
-        },
-    }, 501);
+    try {
+        const data = getValidatedData<z.infer<typeof resetPasswordSchema>>(c);
+        const { schema_name } = c.get('tenant')!;
+        const db = c.get('db')!;
+
+        const resetService = new PasswordResetService(db, schema_name);
+        const result = await resetService.resetPassword(data.token, data.newPassword);
+
+        if (!result.success) {
+            return c.json({
+                success: false,
+                error: {
+                    code: result.error || 'RESET_FAILED',
+                    message: result.message,
+                },
+            }, 400);
+        }
+
+        return c.json({
+            success: true,
+            meta: {
+                message: result.message,
+            },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// ────────────────────────────────────────────────────────────
+// Two-Factor Authentication Routes
+// ────────────────────────────────────────────────────────────
+
+const verify2faSchema = z.object({
+    code: z.string().min(1, '2FA code required'),
+    tempToken: z.string().min(1, 'Temporary token required'),
+});
+
+const setup2faConfirmSchema = z.object({
+    code: z.string().length(6, 'TOTP code must be 6 digits'),
+});
+
+const disable2faSchema = z.object({
+    code: z.string().min(1, 'TOTP or backup code required'),
+});
+
+const regenerateBackupCodesSchema = z.object({
+    code: z.string().length(6, 'TOTP code must be 6 digits'),
+});
+
+/**
+ * POST /auth/2fa/verify
+ * Verify 2FA code during login flow
+ */
+authRoutes.post('/2fa/verify', validate(verify2faSchema), async (c) => {
+    try {
+        const data = getValidatedData<z.infer<typeof verify2faSchema>>(c);
+        const { schema_name, code: tenantCode } = c.get('tenant')!;
+
+        // Decrypt the temp token to get staff info
+        const secret = process.env.JWT_SECRET || 'your_jwt_secret_key_change_in_production_12345';
+        const payload = await verify(data.tempToken, secret, 'HS256');
+
+        if (!payload || !payload.id) {
+            throw new UnauthorizedError('Invalid temporary token');
+        }
+
+        const twoFactorDb = getTenantDb(schema_name);
+        const twoFactorService = new TwoFactorService(twoFactorDb);
+
+        const verifyResult = await twoFactorService.verify(payload.id as string, data.code);
+
+        if (!verifyResult.valid) {
+            return c.json({
+                success: false,
+                error: {
+                    code: 'INVALID_2FA_CODE',
+                    message: 'Invalid two-factor authentication code',
+                },
+            }, 401);
+        }
+
+        // 2FA verified — generate full tokens
+        const staffRepo = new StaffRepository(schema_name);
+        const authService = new AuthService();
+        const staff = await staffRepo.findById(payload.id as string);
+
+        if (!staff) {
+            throw new UnauthorizedError('Staff not found');
+        }
+
+        const accessToken = await authService.generateAccessToken(staff);
+        const refreshToken = await authService.generateRefreshToken(staff);
+
+        return c.json({
+            success: true,
+            data: {
+                accessToken,
+                refreshToken,
+                staff: {
+                    id: staff.id,
+                    staffNumber: staff.staff_number,
+                    email: staff.email,
+                    department: staff.department,
+                    position: staff.position,
+                },
+                usedBackupCode: verifyResult.usedBackupCode,
+            },
+            meta: {
+                tokenExpiresIn: `${authService.getTokenExpirationHours()}h`,
+                tenant: tenantCode,
+            },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * POST /auth/2fa/setup
+ * Generate 2FA setup (QR code + secret).
+ * Requires authenticated user.
+ */
+authRoutes.post('/2fa/setup', async (c) => {
+    try {
+        const user = c.get('user');
+        if (!user) throw new UnauthorizedError('Authentication required');
+
+        const { schema_name } = c.get('tenant')!;
+        const twoFactorDb = getTenantDb(schema_name);
+        const twoFactorService = new TwoFactorService(twoFactorDb);
+
+        const setup = await twoFactorService.generateSetup(user.staffId || user.id);
+
+        return c.json({
+            success: true,
+            data: {
+                qrCodeDataUrl: setup.qrCodeDataUrl,
+                secret: setup.secret,
+                backupCodes: setup.backupCodes,
+            },
+            meta: {
+                message: 'Scan the QR code with your authenticator app, then confirm with a code',
+            },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * POST /auth/2fa/confirm
+ * Confirm 2FA setup by providing a valid TOTP code.
+ * Requires authenticated user.
+ */
+authRoutes.post('/2fa/confirm', validate(setup2faConfirmSchema), async (c) => {
+    try {
+        const user = c.get('user');
+        if (!user) throw new UnauthorizedError('Authentication required');
+
+        const data = getValidatedData<z.infer<typeof setup2faConfirmSchema>>(c);
+        const { schema_name } = c.get('tenant')!;
+        const twoFactorDb = getTenantDb(schema_name);
+        const twoFactorService = new TwoFactorService(twoFactorDb);
+
+        const confirmed = await twoFactorService.confirmSetup(user.staffId || user.id, data.code);
+
+        if (!confirmed) {
+            return c.json({
+                success: false,
+                error: {
+                    code: 'INVALID_CODE',
+                    message: 'Invalid TOTP code. Make sure your authenticator is synced.',
+                },
+            }, 400);
+        }
+
+        return c.json({
+            success: true,
+            meta: {
+                message: 'Two-factor authentication has been enabled',
+            },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * POST /auth/2fa/disable
+ * Disable 2FA. Requires valid TOTP or backup code.
+ */
+authRoutes.post('/2fa/disable', validate(disable2faSchema), async (c) => {
+    try {
+        const user = c.get('user');
+        if (!user) throw new UnauthorizedError('Authentication required');
+
+        const data = getValidatedData<z.infer<typeof disable2faSchema>>(c);
+        const { schema_name } = c.get('tenant')!;
+        const twoFactorDb = getTenantDb(schema_name);
+        const twoFactorService = new TwoFactorService(twoFactorDb);
+
+        const disabled = await twoFactorService.disable(user.staffId || user.id, data.code);
+
+        if (!disabled) {
+            return c.json({
+                success: false,
+                error: {
+                    code: 'INVALID_CODE',
+                    message: 'Invalid code. Cannot disable 2FA.',
+                },
+            }, 400);
+        }
+
+        return c.json({
+            success: true,
+            meta: {
+                message: 'Two-factor authentication has been disabled',
+            },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * GET /auth/2fa/status
+ * Get 2FA status for the authenticated user.
+ */
+authRoutes.get('/2fa/status', async (c) => {
+    try {
+        const user = c.get('user');
+        if (!user) throw new UnauthorizedError('Authentication required');
+
+        const { schema_name } = c.get('tenant')!;
+        const twoFactorDb = getTenantDb(schema_name);
+        const twoFactorService = new TwoFactorService(twoFactorDb);
+
+        const status = await twoFactorService.getStatus(user.staffId || user.id);
+
+        return c.json({
+            success: true,
+            data: status,
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * POST /auth/2fa/backup-codes
+ * Regenerate backup codes. Requires valid TOTP code.
+ */
+authRoutes.post('/2fa/backup-codes', validate(regenerateBackupCodesSchema), async (c) => {
+    try {
+        const user = c.get('user');
+        if (!user) throw new UnauthorizedError('Authentication required');
+
+        const data = getValidatedData<z.infer<typeof regenerateBackupCodesSchema>>(c);
+        const { schema_name } = c.get('tenant')!;
+        const twoFactorDb = getTenantDb(schema_name);
+        const twoFactorService = new TwoFactorService(twoFactorDb);
+
+        const codes = await twoFactorService.regenerateBackupCodes(user.staffId || user.id, data.code);
+
+        return c.json({
+            success: true,
+            data: {
+                backupCodes: codes,
+            },
+            meta: {
+                message: 'New backup codes generated. Store them securely.',
+            },
+        });
+    } catch (error) {
+        throw error;
+    }
 });

@@ -86,3 +86,46 @@ export type {
     BalanceSheet,
     AccountType,
 } from './accountingService';
+
+// Email Service
+export { EmailService } from './emailService';
+export type {
+    SendEmailOptions,
+    SendEmailResult,
+    EmailAttachment,
+    EmailGatewayConfig,
+} from './emailService';
+
+// Notification Service
+export { NotificationService } from './notificationService';
+export type {
+    NotificationChannel,
+    NotificationRecipient,
+    SendNotificationOptions,
+    NotificationResult,
+    BulkNotificationOptions,
+    BulkNotificationResult,
+} from './notificationService';
+
+// Password Reset Service
+export { PasswordResetService } from './passwordResetService';
+export type {
+    ResetTokenData,
+    RequestResetResult,
+    ResetPasswordResult,
+} from './passwordResetService';
+
+// Fixed Deposit Service
+export { FixedDepositService } from './fixedDepositService';
+export type {
+    MaturityCheckResult,
+    FdInterestAccrualResult,
+    PrematureWithdrawalResult,
+} from './fixedDepositService';
+
+// Two-Factor Authentication Service
+export { TwoFactorService } from './twoFactorService';
+export type {
+    TwoFactorSetupResult,
+    TwoFactorVerifyResult,
+} from './twoFactorService';

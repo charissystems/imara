@@ -10,6 +10,8 @@
  *  - penalty_calculation:  Daily penalty computation for overdue loans (LON-023)
  *  - npl_flagging:         Daily NPL classification check (LON-028)
  *  - repayment_reminders:  Upcoming repayment notifications (LON-024)
+ *  - fd_maturity_check:    Daily FD maturity alerts + auto-rollover
+ *  - fd_interest_accrual:  Daily FD interest accrual
  * 
  * Architecture:
  *  - One shared Redis connection across all queues
@@ -23,6 +25,8 @@ import IORedis from 'ioredis';
 import { getTenantDb, publicDb } from '../config/database';
 import { InterestAccrualEngine } from '../services/interestAccrualService';
 import { RepaymentService } from '../services/repaymentService';
+import { NotificationService } from '../services/notificationService';
+import { FixedDepositService } from '../services/fixedDepositService';
 import { appLogger } from '../middleware/logger';
 
 // ────────────────────────────────────────────────────────────
@@ -41,7 +45,9 @@ export type JobType =
     | 'interest_posting'
     | 'penalty_calculation'
     | 'npl_flagging'
-    | 'repayment_reminders';
+    | 'repayment_reminders'
+    | 'fd_maturity_check'
+    | 'fd_interest_accrual';
 
 interface JobDefinition {
     queueName: string;
@@ -80,6 +86,16 @@ const JOB_DEFINITIONS: Record<JobType, JobDefinition> = {
         queueName: 'sacco:repayment-reminders',
         cronExpression: '0 7 * * *',         // Daily at 07:00 UTC (business hours)
         description: 'Send upcoming repayment reminders',
+    },
+    fd_maturity_check: {
+        queueName: 'sacco:fd-maturity-check',
+        cronExpression: '0 5 * * *',         // Daily at 05:00 UTC
+        description: 'FD maturity alerts and auto-rollover',
+    },
+    fd_interest_accrual: {
+        queueName: 'sacco:fd-interest-accrual',
+        cronExpression: '30 1 * * *',        // Daily at 01:30 UTC (after savings accrual)
+        description: 'Daily fixed deposit interest accrual',
     },
 };
 
@@ -147,9 +163,65 @@ async function processPenaltyCalculation(job: Job<JobData>): Promise<void> {
     const { tenantSchemaName, asOfDate } = job.data;
     const db = getTenantDb(tenantSchemaName);
     const service = new RepaymentService(db);
+    const notificationService = new NotificationService(db);
     const date = asOfDate ? new Date(asOfDate) : new Date();
 
     const result = await service.runPenaltyCalculation(date);
+
+    // Send penalty notifications to affected members
+    if (result.loansProcessed > 0) {
+        try {
+            const saccoConfig = await db
+                .selectFrom('sacco_configuration')
+                .select(['organization_name'])
+                .executeTakeFirst();
+            const saccoName = saccoConfig?.organization_name || 'SACCO';
+
+            // Get overdue installments with member details for notification
+            const overdueLoans = await db
+                .selectFrom('loan_schedules as ls')
+                .innerJoin('loan_accounts as la', 'la.id', 'ls.loan_account_id')
+                .innerJoin('members as m', 'm.id', 'la.member_id')
+                .select([
+                    'la.loan_number',
+                    'la.total_outstanding',
+                    'm.id as member_id',
+                    'm.first_name',
+                    'm.last_name',
+                    'm.email',
+                    'ls.penalty_payment',
+                    'ls.days_overdue',
+                ])
+                .where('ls.status', '=', 'overdue' as any)
+                .where('ls.days_overdue', '>', 0)
+                .execute();
+
+            // Deduplicate by member+loan and send notices
+            const seen = new Set<string>();
+            for (const loan of overdueLoans) {
+                const key = `${loan.member_id}:${loan.loan_number}`;
+                if (seen.has(key) || !loan.email) continue;
+                seen.add(key);
+
+                try {
+                    await notificationService.sendPenaltyNotice({
+                        memberId: loan.member_id,
+                        memberEmail: loan.email,
+                        memberName: `${loan.first_name} ${loan.last_name}`,
+                        loanAccountNumber: loan.loan_number,
+                        penaltyAmount: new (await import('decimal.js')).default(loan.penalty_payment?.toString() ?? '0').toFixed(2),
+                        outstandingBalance: new (await import('decimal.js')).default(loan.total_outstanding?.toString() ?? '0').toFixed(2),
+                        daysOverdue: loan.days_overdue as number,
+                        saccoName,
+                    });
+                } catch {
+                    // Non-fatal: notification failure shouldn't crash the job
+                }
+            }
+        } catch (error) {
+            appLogger.error('Failed to send penalty notifications', error as Error);
+        }
+    }
 
     await logTaskExecution(tenantSchemaName, 'penalty_calculation', {
         recordsProcessed: result.loansProcessed,
@@ -165,11 +237,67 @@ async function processNplFlagging(job: Job<JobData>): Promise<void> {
     const { tenantSchemaName, asOfDate } = job.data;
     const db = getTenantDb(tenantSchemaName);
     const service = new RepaymentService(db);
+    const notificationService = new NotificationService(db);
     const date = asOfDate ? new Date(asOfDate) : new Date();
 
     const result = await service.runNplFlagging(date);
 
-    await logTaskExecution(tenantSchemaName, 'penalty_calculation', {
+    // Send NPL warnings to staff for newly flagged loans
+    if (result.loansFlagged > 0) {
+        try {
+            const saccoConfig = await db
+                .selectFrom('sacco_configuration')
+                .select(['organization_name'])
+                .executeTakeFirst();
+            const saccoName = saccoConfig?.organization_name || 'SACCO';
+
+            // Get admin/manager staff to notify
+            const adminStaff = await db
+                .selectFrom('staff as s')
+                .innerJoin('roles as r', 'r.id', 's.role_id')
+                .select(['s.email', 's.first_name', 's.last_name'])
+                .where('s.status', '=', 'active')
+                .where('r.name', 'in', ['admin', 'manager', 'loan_officer'])
+                .execute();
+
+            // Get newly flagged NPL loans
+            const nplLoans = await db
+                .selectFrom('loan_accounts as la')
+                .innerJoin('members as m', 'm.id', 'la.member_id')
+                .select([
+                    'la.loan_number',
+                    'la.total_outstanding',
+                    'm.first_name',
+                    'm.last_name',
+                ])
+                .where('la.status', '=', 'defaulted')
+                .where('la.updated_at', '>=', date as any)
+                .execute();
+
+            for (const staffMember of adminStaff) {
+                if (!staffMember.email) continue;
+                for (const loan of nplLoans) {
+                    try {
+                        await notificationService.sendNplWarning({
+                            staffEmail: staffMember.email,
+                            staffName: `${staffMember.first_name} ${staffMember.last_name}`,
+                            memberName: `${loan.first_name} ${loan.last_name}`,
+                            loanAccountNumber: loan.loan_number,
+                            outstandingBalance: new (await import('decimal.js')).default(loan.total_outstanding?.toString() ?? '0').toFixed(2),
+                            daysOverdue: 90,
+                            saccoName,
+                        });
+                    } catch {
+                        // Non-fatal
+                    }
+                }
+            }
+        } catch (error) {
+            appLogger.error('Failed to send NPL notifications', error as Error);
+        }
+    }
+
+    await logTaskExecution(tenantSchemaName, 'npl_flagging', {
         recordsProcessed: result.loansFlagged,
         recordsFailed: result.errors.length,
         status: result.errors.length === 0 ? 'success' : 'partial',
@@ -182,23 +310,109 @@ async function processNplFlagging(job: Job<JobData>): Promise<void> {
 async function processRepaymentReminders(job: Job<JobData>): Promise<void> {
     const { tenantSchemaName } = job.data;
     const db = getTenantDb(tenantSchemaName);
-    const service = new RepaymentService(db);
+    const repaymentService = new RepaymentService(db);
+    const notificationService = new NotificationService(db);
+    const startTime = Date.now();
 
-    const reminders = await service.getUpcomingReminders(7);
+    const reminders = await repaymentService.getUpcomingReminders(7);
 
-    // For now, log the reminder data. A notification service will send SMS/email.
-    appLogger.info('Repayment reminders generated', {
+    let sent = 0;
+    let failed = 0;
+
+    // Get SACCO name for email templates
+    const saccoConfig = await db
+        .selectFrom('sacco_configuration')
+        .select(['organization_name'])
+        .executeTakeFirst();
+    const saccoName = saccoConfig?.organization_name || 'SACCO';
+
+    for (const reminder of reminders) {
+        try {
+            // Look up member details for notification
+            const member = await db
+                .selectFrom('members')
+                .select(['id', 'first_name', 'last_name', 'email', 'phone'])
+                .where('id', '=', reminder.memberId)
+                .executeTakeFirst();
+
+            if (!member || !member.email) {
+                failed++;
+                continue;
+            }
+
+            await notificationService.sendRepaymentReminder({
+                memberId: member.id,
+                memberName: `${member.first_name} ${member.last_name}`,
+                memberEmail: member.email,
+                loanAccountNumber: reminder.loanNumber,
+                installmentAmount: reminder.amountDue.toFixed(2),
+                dueDate: reminder.dueDate.toISOString().split('T')[0],
+                daysUntilDue: reminder.daysUntilDue,
+                outstandingBalance: reminder.amountDue.toFixed(2),
+                saccoName,
+            });
+            sent++;
+        } catch (error) {
+            failed++;
+            appLogger.error('Failed to send reminder', error as Error, {
+                loanAccountId: reminder.loanAccountId,
+                memberId: reminder.memberId,
+            });
+        }
+    }
+
+    const durationMs = Date.now() - startTime;
+
+    appLogger.info('Repayment reminders processed', {
         tenant: tenantSchemaName,
-        count: reminders.length,
+        total: reminders.length,
+        sent,
+        failed,
     });
 
     await logTaskExecution(tenantSchemaName, 'reminder_sending', {
-        recordsProcessed: reminders.length,
-        recordsFailed: 0,
-        status: 'success',
-        logs: `Generated ${reminders.length} reminders`,
+        recordsProcessed: sent,
+        recordsFailed: failed,
+        status: failed === 0 ? 'success' : (sent > 0 ? 'partial' : 'failed'),
+        logs: `Sent: ${sent}, Failed: ${failed}, Total: ${reminders.length}`,
         errorMessage: null,
-        durationMs: 0,
+        durationMs,
+    });
+}
+
+async function processFdMaturityCheck(job: Job<JobData>): Promise<void> {
+    const { tenantSchemaName, asOfDate } = job.data;
+    const db = getTenantDb(tenantSchemaName);
+    const service = new FixedDepositService(db);
+    const date = asOfDate ? new Date(asOfDate) : new Date();
+
+    const result = await service.runMaturityCheck(date);
+
+    await logTaskExecution(tenantSchemaName, 'fd_maturity_check', {
+        recordsProcessed: result.depositsMatured + result.alertsSent,
+        recordsFailed: result.errors.length,
+        status: result.errors.length === 0 ? 'success' : 'partial',
+        logs: `Alerts: ${result.alertsSent}, Matured: ${result.depositsMatured}, Rolled over: ${result.depositsRolledOver}`,
+        errorMessage: result.errors.length > 0 ? JSON.stringify(result.errors) : null,
+        durationMs: result.durationMs,
+    });
+}
+
+async function processFdInterestAccrual(job: Job<JobData>): Promise<void> {
+    const { tenantSchemaName, asOfDate } = job.data;
+    const db = getTenantDb(tenantSchemaName);
+    const service = new FixedDepositService(db);
+    const date = asOfDate ? new Date(asOfDate) : new Date();
+
+    const result = await service.runDailyInterestAccrual(date);
+
+    await logTaskExecution(tenantSchemaName, 'fd_interest_accrual', {
+        recordsProcessed: result.depositsProcessed,
+        recordsFailed: result.errors.length,
+        status: result.errors.length === 0 ? 'success' : 'partial',
+        logs: `Accrued: ${result.totalInterestAccrued.toString()}`,
+        errorMessage: result.errors.length > 0 ? JSON.stringify(result.errors) : null,
+        durationMs: result.durationMs,
     });
 }
 
@@ -273,7 +487,8 @@ async function logTaskExecution(
 // ────────────────────────────────────────────────────────────
 
 export class JobScheduler {
-    private connection: IORedis;
+    // Cast needed: ioredis version used directly may differ from BullMQ's bundled version
+    private connection: any;
     private queues: Map<JobType, Queue> = new Map();
     private workers: Map<JobType, Worker> = new Map();
 
@@ -309,6 +524,8 @@ export class JobScheduler {
         this.createWorker('penalty_calculation', processPenaltyCalculation);
         this.createWorker('npl_flagging', processNplFlagging);
         this.createWorker('repayment_reminders', processRepaymentReminders);
+        this.createWorker('fd_maturity_check', processFdMaturityCheck);
+        this.createWorker('fd_interest_accrual', processFdInterestAccrual);
 
         // Schedule repeating jobs for all active tenants
         await this.scheduleAllTenants();

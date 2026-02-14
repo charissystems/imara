@@ -17,6 +17,7 @@ export async function authMiddleware(c: Context<Env>, next: Next) {
         '/auth/forgot-password',
         '/auth/reset-password',
         '/auth/verify-otp',
+        '/auth/2fa/verify',
         '/health',
     ];
 

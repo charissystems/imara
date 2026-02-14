@@ -26,7 +26,7 @@
 
 - [x] **Job Scheduler Setup** (P0)
   - [x] Install BullMQ + ioredis
-  - [x] Configure 5 job queues (interest_accrual, interest_posting, penalty_calculation, npl_flagging, repayment_reminders)
+  - [x] Configure 7 job queues (interest_accrual, interest_posting, penalty_calculation, npl_flagging, repayment_reminders, fd_maturity_check, fd_interest_accrual)
   - [x] Add job monitoring (getStats endpoint)
   - [x] Set up cron schedules
   - [x] Manual trigger endpoint (POST /admin/jobs/trigger)
@@ -79,40 +79,45 @@
   - [ ] Template processing
   - [ ] Delivery tracking
   
-- [ ] **Email Service** (P0)
-  - [ ] SMTP or API integration
-  - [ ] Template processing
+- [x] **Email Service** (P0) ✅
+  - [x] SMTP or API integration (nodemailer, per-tenant gateway config)
+  - [x] Template processing ({{variable}} merge engine)
   - [ ] Attachment support
-  - [ ] Delivery tracking
+  - [x] Delivery tracking (message_delivery_log table)
 
-### Week 5-6: Automation
-- [ ] **Penalty Calculation Job** (P1)
-  - [ ] Identify overdue installments
-  - [ ] Calculate penalties per product
-  - [ ] Post penalty transactions
-  - [ ] Send notifications
+### Week 5-6: Automation ✅ COMPLETE
+- [x] **Penalty Calculation Job** (P1) ✅
+  - [x] Identify overdue installments (RepaymentService.runPenaltyCalculation)
+  - [x] Calculate penalties per product (via scheduler processPenaltyCalculation)
+  - [x] Post penalty transactions
+  - [x] Send notifications (sendPenaltyNotice + sendOverdueNotice via NotificationService)
   
-- [ ] **NPL Flagging Job** (P1)
-  - [ ] Identify loans overdue >30 days
-  - [ ] Update loan status
-  - [ ] Generate NPL report
+- [x] **NPL Flagging Job** (P1) ✅
+  - [x] Identify loans overdue >30 days (RepaymentService.runNplFlagging)
+  - [x] Update loan status (scheduler processNplFlagging)
+  - [x] Send NPL warnings to staff (sendNplWarning via NotificationService)
   
-- [ ] **Repayment Reminders** (P1)
-  - [ ] Send 3 days before due date
-  - [ ] Send on due date
-  - [ ] Send 1 day after due date
+- [x] **Repayment Reminders** (P1) ✅
+  - [x] Send 3 days before due date (wired to NotificationService)
+  - [x] Send on due date
+  - [x] Send 1 day after due date
   
-- [ ] **FD Maturity Alerts** (P1)
-  - [ ] Send 30 days before
-  - [ ] Send 14 days before
-  - [ ] Send 7 days before
-  - [ ] Send on maturity date
+- [x] **FD Maturity Alerts** (P1) ✅
+  - [x] Send 30 days before (FixedDepositService.runMaturityCheck)
+  - [x] Send 14 days before
+  - [x] Send 7 days before
+  - [x] Send on maturity date
+  - [x] Auto-rollover for configured FDs
+  - [x] Daily FD interest accrual (simple + compound)
+  - [x] Premature withdrawal calculation (penalty + WHT)
   
-- [ ] **2FA Implementation** (P1)
-  - [ ] SMS OTP service
-  - [ ] 2FA enable/disable endpoint
-  - [ ] Verify OTP endpoint
-  - [ ] Backup codes generation
+- [x] **2FA Implementation** (P1) ✅
+  - [x] TOTP-based authenticator app (otpauth — replaces SMS OTP)
+  - [x] 2FA enable/disable endpoint (POST /auth/2fa/setup, /disable)
+  - [x] Verify OTP endpoint (POST /auth/2fa/verify)
+  - [x] Backup codes generation (10 codes, XXXX-XXXX format)
+  - [x] QR code for authenticator setup
+  - [x] 2FA login flow (temp token → verify → full access)
 
 ### Week 7-8: Reporting
 - [ ] **Financial Reports** (P0)
@@ -138,7 +143,7 @@
   - [ ] Real-time KPIs
   - [ ] Charts/visualizations
   - [ ] Recent activity
-  - [ ] Alerts/notifications
+  - [x] Alerts/notifications (NotificationService convenience methods)
 
 ---
 
@@ -148,7 +153,7 @@
 - [x] Database schema
 - [x] Basic CRUD endpoints
 - [ ] Bulk CSV import
-- [ ] Welcome notifications
+- [x] Welcome notifications (NotificationService.sendWelcome)
 - [ ] Auto-create savings account
 - [ ] Self-service portal
 - [ ] Statement generation
@@ -182,11 +187,11 @@
 - [x] Database schema
 - [ ] FD opening endpoint
 - [ ] FD certificate PDF
-- [ ] Interest calculation
-- [ ] Maturity alert job
-- [ ] Auto-rollover logic
-- [ ] Premature withdrawal
-- [ ] WHT computation
+- [x] Interest calculation ✅ (FixedDepositService — daily simple + compound)
+- [x] Maturity alert job ✅ (30/14/7/0 days, scheduler fd_maturity_check)
+- [x] Auto-rollover logic ✅ (principal_only or principal_plus_interest)
+- [x] Premature withdrawal ✅ (fixed, percentage, interest_reduction penalties)
+- [x] WHT computation ✅ (withholding_tax_rate from product config)
 
 ### Loans
 - [x] Database schema
@@ -216,13 +221,13 @@
 
 ### Messaging
 - [x] Database schema
-- [ ] **SMS integration** ⚠️
-- [ ] **Email integration** ⚠️
+- [ ] **SMS integration** ⚠️ (deferred — Africa's Talking)
+- [x] **Email integration** ✅ (EmailService — SMTP/SendGrid/Mailgun/SES)
 - [ ] Push notifications
-- [ ] Message queue worker
-- [ ] Bulk messaging
-- [ ] Template engine
-- [ ] Delivery tracking
+- [x] Message queue worker (NotificationService dispatcher)
+- [x] Bulk messaging (sendBulk method)
+- [x] Template engine ({{variable}} merge, DB templates)
+- [x] Delivery tracking (message_delivery_log)
 
 ### Security & Audit
 - [x] Authentication (JWT access + refresh tokens)
@@ -231,9 +236,9 @@
 - [x] Password hashing (bcrypt)
 - [x] Account lockout after failed attempts
 - [x] Auth repository aligned to schema (account_locked, no ghost columns)
-- [ ] **2FA** ⚠️
+- [x] **2FA** ✅ (TOTP via otpauth, backup codes, QR setup)
 - [ ] Password expiry
-- [ ] Password reset flow (needs migration for reset_token columns)
+- [x] Password reset flow ✅ (Redis-based tokens, 30-min TTL, single-use)
 - [ ] IP whitelisting (Phase 2)
 - [ ] Audit log viewer
 - [ ] Reversal workflow
@@ -247,7 +252,12 @@
 - [x] Loan schedule calculator (flat, EMI, declining — 25 tests)
 - [x] Interest accrual calculation (daily, compound, 365/360 — 12 tests)
 - [x] Repayment allocation (partial, overpay, penalty — 13 tests)
-- [x] Auth service (tokens, lockout, password — 354 total tests passing)
+- [x] Auth service (tokens, lockout, password — 434 total tests passing)
+- [x] Email service tests (7 tests)
+- [x] Notification service tests (17 tests)
+- [x] Password reset service tests (8 tests)
+- [x] Fixed deposit service tests (25 tests — interest calc, withdrawal, rollover, alerts)
+- [x] Two-factor auth service tests (23 tests — TOTP, backup codes, verification flow)
 - [x] Permission checks
 - [x] Validation logic (middleware tests)
 - [ ] Date calculations
@@ -496,11 +506,15 @@ pm2 logs
 - [x] All routes aligned to actual schema
 - [x] 354 tests passing
 
-### Sprint 2 (Week 3-4)
+### Sprint 2 (Week 3-4) — IN PROGRESS
 **Goal:** External integrations live
-- [ ] Mobile money (MTN + Airtel)
-- [ ] SMS/Email
-- [ ] Message queue
+- [ ] Mobile money (MTN + Airtel) — deferred
+- [x] Email Service (emailService.ts — SMTP + multi-provider)
+- [x] Notification Service (notificationService.ts — template engine + channel dispatch)
+- [x] Password Reset (passwordResetService.ts — Redis tokens)
+- [x] Repayment reminders wired to email
+- [ ] SMS Gateway — deferred
+- [ ] Message queue (BullMQ already in place from Sprint 1)
 
 ### Sprint 3 (Week 5-6)
 **Goal:** Automation complete
@@ -517,8 +531,8 @@ pm2 logs
 ---
 
 **Last Updated:** February 14, 2026  
-**Sprint:** Sprint 1 COMPLETE — Starting Sprint 2  
-**MVP Launch Target:** ~6 weeks remaining
+**Sprint:** Sprint 2 IN PROGRESS (Email/Notifications done, MoMo/SMS deferred)  
+**MVP Launch Target:** ~5 weeks remaining
 
 ### Key Files Added/Modified (Sprint 1)
 | File | Lines | Purpose |
@@ -538,3 +552,15 @@ pm2 logs
 | `src/routes/accounts.ts` | Rewritten | Correct field names, proper repo usage |
 | `src/routes/auth.ts` | Fixed | Aligned to actual staff_credentials columns |
 | `src/routes/admin.ts` | Fixed | Removed member_id join, correct columns |
+
+### Key Files Added/Modified (Sprint 2)
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/services/emailService.ts` | ~350 | SMTP email with per-tenant gateway config |
+| `src/services/notificationService.ts` | ~670 | Template engine + multi-channel dispatch |
+| `src/services/passwordResetService.ts` | ~230 | Redis-based password reset tokens |
+| `src/jobs/scheduler.ts` | Modified | Rewired repayment reminders to email |
+| `src/routes/auth.ts` | Modified | Real password reset endpoints |
+| `tests/services/emailService.test.ts` | New | 7 tests for email sending |
+| `tests/services/notificationService.test.ts` | New | 17 tests for notifications |
+| `tests/services/passwordResetService.test.ts` | New | 8 tests for password reset |
