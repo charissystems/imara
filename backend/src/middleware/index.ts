@@ -11,9 +11,11 @@ export { requestContext, schemaContext } from './context';
 export { tenantResolver, clearTenantCache } from './tenantResolver';
 
 // Authentication Middleware
-export { authMiddleware, requireAuth } from './auth';
+export { authMiddleware, requireAuth, requireRole } from './auth';
 
-// Audit Middleware
+// Role-Based Access Control
+export { rbacMiddleware, enforcePermission, enforceAnyPermission, enforceAllPermissions, UserRole, RoleUtils } from './rbac';
+export type { Permission } from './rbac';
 export { auditMiddleware, AuditLogger } from './audit';
 export type { AuditLog } from './audit';
 

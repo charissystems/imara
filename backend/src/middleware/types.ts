@@ -3,6 +3,7 @@ import { Hono, Context } from 'hono';
 import { Kysely } from 'kysely';
 import { TenantDatabase, Tenant } from '../database/types';
 import { AuditLogger } from './audit';
+import { Permission } from './rbac';
 
 /**
  * Context variables available across all routes
@@ -36,7 +37,11 @@ export type Variables = {
         deleted_at?: string | null;
     };
     
-    // Subscription and usage limits info
+    // Alias for backward compatibility
+    currentUser?: Variables['user'];
+    
+    // User permissions from RBAC
+    userPermissions?: Permission[];
     subscriptionWarning?: {
         type: 'EXPIRING_SOON' | 'EXPIRED' | 'NONE';
         message: string;
