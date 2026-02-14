@@ -1,6 +1,14 @@
-import { Staff, NewStaff, StaffUpdate, Role } from '../database/types';
+import { Staff, NewStaff, StaffUpdate } from '../database/types';
 import { BaseRepository } from './baseRepository';
 
+/**
+ * Repository for staff management.
+ *
+ * Column reference (staff table):
+ *   id, staff_number, status, first_name, middle_name, last_name,
+ *   email, phone, department, position, hire_date, exit_date,
+ *   role_id, branch_id, created_by, updated_by, created_at, updated_at, deleted_at
+ */
 export class StaffRepository extends BaseRepository {
 
     async findById(id: string): Promise<Staff | undefined> {
@@ -9,6 +17,7 @@ export class StaffRepository extends BaseRepository {
                 .selectFrom('staff')
                 .selectAll()
                 .where('id', '=', id)
+                .where('deleted_at', 'is', null)
                 .executeTakeFirst(),
             'findById',
             { staffId: id }
@@ -31,8 +40,9 @@ export class StaffRepository extends BaseRepository {
         return this.executeSafely(
             () => this.db
                 .updateTable('staff')
-                .set(updates)
+                .set({ ...updates, updated_at: new Date() })
                 .where('id', '=', id)
+                .where('deleted_at', 'is', null)
                 .returningAll()
                 .executeTakeFirstOrThrow(),
             'update',
@@ -41,29 +51,28 @@ export class StaffRepository extends BaseRepository {
     }
 
     /**
-     * Get Staff with their Role details and Person details
+     * Get staff with their role details
      */
     async getStaffWithDetails(staffId: string) {
         return this.executeSafely(
             () => this.db
                 .selectFrom('staff')
-                .innerJoin('persons', 'persons.id', 'staff.person_id')
                 .leftJoin('roles', 'roles.id', 'staff.role_id')
                 .select([
                     'staff.id',
                     'staff.staff_number',
-                    'staff.work_email',
+                    'staff.first_name',
+                    'staff.last_name',
+                    'staff.email',
+                    'staff.phone',
                     'staff.department',
-                    'staff.job_title',
-                    'staff.employment_status',
+                    'staff.position',
+                    'staff.status',
+                    'staff.hire_date',
                     'roles.name as role_name',
-                    'roles.display_name as role_display_name',
-                    'persons.first_name',
-                    'persons.last_name',
-                    'persons.personal_email',
-                    'persons.primary_phone',
                 ])
                 .where('staff.id', '=', staffId)
+                .where('staff.deleted_at', 'is', null)
                 .executeTakeFirst(),
             'getStaffWithDetails',
             { staffId }
@@ -75,10 +84,30 @@ export class StaffRepository extends BaseRepository {
             () => this.db
                 .selectFrom('staff')
                 .selectAll()
-                .where('work_email', '=', email)
+                .where('email', '=', email)
+                .where('deleted_at', 'is', null)
                 .executeTakeFirst(),
             'findByEmail',
             { email }
+        );
+    }
+
+    async findAll(status?: Staff['status']): Promise<Staff[]> {
+        return this.executeSafely(
+            async () => {
+                let query = this.db
+                    .selectFrom('staff')
+                    .selectAll()
+                    .where('deleted_at', 'is', null);
+
+                if (status) {
+                    query = query.where('status', '=', status);
+                }
+
+                return query.orderBy('created_at', 'desc').execute();
+            },
+            'findAll',
+            { status }
         );
     }
 }

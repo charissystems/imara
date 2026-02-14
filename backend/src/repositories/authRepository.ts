@@ -2,8 +2,14 @@ import { StaffCredentials, NewStaffCredentials, StaffCredentialsUpdate } from '.
 import { BaseRepository } from './baseRepository';
 
 /**
- * Repository for staff authentication credentials
- * Handles password hashes, tokens, and account lockouts
+ * Repository for staff authentication credentials.
+ * Handles password hashes, lockouts, and 2FA state.
+ *
+ * Column reference (staff_credentials table):
+ *   id, staff_id, password_hash, password_salt, password_changed_at,
+ *   two_factor_enabled, two_factor_secret, two_factor_backup_codes,
+ *   account_locked, failed_login_attempts, locked_until,
+ *   last_login_at, last_login_ip, created_at, updated_at
  */
 export class AuthRepository extends BaseRepository {
     /**
@@ -30,26 +36,9 @@ export class AuthRepository extends BaseRepository {
                 .selectFrom('staff_credentials')
                 .selectAll()
                 .where('staff_id', '=', staffId)
-                .where('deleted_at', 'is', null)
                 .executeTakeFirst(),
             'findByStaffId',
             { staffId }
-        );
-    }
-
-    /**
-     * Find credentials by reset token
-     */
-    async findByResetToken(resetToken: string): Promise<StaffCredentials | undefined> {
-        return this.executeSafely(
-            () => this.db
-                .selectFrom('staff_credentials')
-                .selectAll()
-                .where('reset_token', '=', resetToken)
-                .where('deleted_at', 'is', null)
-                .executeTakeFirst(),
-            'findByResetToken',
-            { resetToken }
         );
     }
 
@@ -65,7 +54,6 @@ export class AuthRepository extends BaseRepository {
                     updated_at: new Date(),
                 })
                 .where('staff_id', '=', staffId)
-                .where('deleted_at', 'is', null)
                 .returningAll()
                 .executeTakeFirstOrThrow(),
             'update',
@@ -74,30 +62,21 @@ export class AuthRepository extends BaseRepository {
     }
 
     /**
-     * Update password hash and reset related fields
+     * Update password hash
      */
-    async updatePassword(
-        staffId: string,
-        passwordHash: string,
-        expiresAt?: Date
-    ): Promise<StaffCredentials> {
+    async updatePassword(staffId: string, passwordHash: string): Promise<StaffCredentials> {
         return this.executeSafely(
             () => this.db
                 .updateTable('staff_credentials')
                 .set({
                     password_hash: passwordHash,
                     password_changed_at: new Date(),
-                    last_password_changed_at: new Date(),
-                    password_expires_at: expiresAt || null,
-                    reset_token: null,
-                    reset_token_expires_at: null,
                     failed_login_attempts: 0,
-                    is_locked: false,
+                    account_locked: false,
                     locked_until: null,
                     updated_at: new Date(),
                 })
                 .where('staff_id', '=', staffId)
-                .where('deleted_at', 'is', null)
                 .returningAll()
                 .executeTakeFirstOrThrow(),
             'updatePassword',
@@ -109,13 +88,11 @@ export class AuthRepository extends BaseRepository {
      * Increment failed login attempts
      */
     async incrementFailedAttempts(staffId: string): Promise<StaffCredentials> {
-        // First, get current credentials
         const current = await this.findByStaffId(staffId);
         if (!current) {
             throw new Error('No credentials found');
         }
 
-        // Update with incremented value
         return this.executeSafely(
             () => this.db
                 .updateTable('staff_credentials')
@@ -124,7 +101,6 @@ export class AuthRepository extends BaseRepository {
                     updated_at: new Date(),
                 })
                 .where('staff_id', '=', staffId)
-                .where('deleted_at', 'is', null)
                 .returningAll()
                 .executeTakeFirstOrThrow(),
             'incrementFailedAttempts',
@@ -140,12 +116,11 @@ export class AuthRepository extends BaseRepository {
             () => this.db
                 .updateTable('staff_credentials')
                 .set({
-                    is_locked: true,
+                    account_locked: true,
                     locked_until: lockedUntil,
                     updated_at: new Date(),
                 })
                 .where('staff_id', '=', staffId)
-                .where('deleted_at', 'is', null)
                 .returningAll()
                 .executeTakeFirstOrThrow(),
             'lockAccount',
@@ -154,20 +129,19 @@ export class AuthRepository extends BaseRepository {
     }
 
     /**
-     * Unlock staff account
+     * Unlock staff account and reset failed attempts
      */
     async unlockAccount(staffId: string): Promise<StaffCredentials> {
         return this.executeSafely(
             () => this.db
                 .updateTable('staff_credentials')
                 .set({
-                    is_locked: false,
+                    account_locked: false,
                     locked_until: null,
                     failed_login_attempts: 0,
                     updated_at: new Date(),
                 })
                 .where('staff_id', '=', staffId)
-                .where('deleted_at', 'is', null)
                 .returningAll()
                 .executeTakeFirstOrThrow(),
             'unlockAccount',
@@ -176,104 +150,24 @@ export class AuthRepository extends BaseRepository {
     }
 
     /**
-     * Update last login timestamp
+     * Update last login timestamp and IP
      */
-    async updateLastLogin(staffId: string): Promise<StaffCredentials> {
+    async updateLastLogin(staffId: string, ip?: string): Promise<StaffCredentials> {
         return this.executeSafely(
             () => this.db
                 .updateTable('staff_credentials')
                 .set({
                     last_login_at: new Date(),
+                    ...(ip ? { last_login_ip: ip } : {}),
+                    failed_login_attempts: 0,
+                    account_locked: false,
+                    locked_until: null,
                     updated_at: new Date(),
                 })
                 .where('staff_id', '=', staffId)
-                .where('deleted_at', 'is', null)
                 .returningAll()
                 .executeTakeFirstOrThrow(),
             'updateLastLogin',
-            { staffId }
-        );
-    }
-
-    /**
-     * Reset password for staff member
-     */
-    async setPasswordReset(
-        staffId: string,
-        resetToken: string,
-        expiresAt: Date
-    ): Promise<StaffCredentials> {
-        return this.executeSafely(
-            () => this.db
-                .updateTable('staff_credentials')
-                .set({
-                    reset_token: resetToken,
-                    reset_token_expires_at: expiresAt,
-                    updated_at: new Date(),
-                })
-                .where('staff_id', '=', staffId)
-                .where('deleted_at', 'is', null)
-                .returningAll()
-                .executeTakeFirstOrThrow(),
-            'setPasswordReset',
-            { staffId }
-        );
-    }
-
-    /**
-     * Deactivate account
-     */
-    async deactivate(staffId: string): Promise<StaffCredentials> {
-        return this.executeSafely(
-            () => this.db
-                .updateTable('staff_credentials')
-                .set({
-                    is_active: false,
-                    updated_at: new Date(),
-                })
-                .where('staff_id', '=', staffId)
-                .where('deleted_at', 'is', null)
-                .returningAll()
-                .executeTakeFirstOrThrow(),
-            'deactivate',
-            { staffId }
-        );
-    }
-
-    /**
-     * Activate account
-     */
-    async activate(staffId: string): Promise<StaffCredentials> {
-        return this.executeSafely(
-            () => this.db
-                .updateTable('staff_credentials')
-                .set({
-                    is_active: true,
-                    is_locked: false,
-                    locked_until: null,
-                    failed_login_attempts: 0,
-                    updated_at: new Date(),
-                })
-                .where('staff_id', '=', staffId)
-                .where('deleted_at', 'is', null)
-                .returningAll()
-                .executeTakeFirstOrThrow(),
-            'activate',
-            { staffId }
-        );
-    }
-
-    /**
-     * Soft delete credentials
-     */
-    async softDelete(staffId: string): Promise<void> {
-        await this.executeSafely(
-            () => this.db
-                .updateTable('staff_credentials')
-                .set({ deleted_at: new Date() })
-                .where('staff_id', '=', staffId)
-                .execute(),
-            'softDelete',
             { staffId }
         );
     }

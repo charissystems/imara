@@ -85,54 +85,30 @@ export class MemberRepository extends BaseRepository {
 		return this.executeSafely(
 			() => this.db
 				.selectFrom('members')
-				.innerJoin('persons', 'persons.id', 'members.person_id')
 				.select([
-					'members.id',
-					'members.member_number',
-					'members.status',
-					'persons.first_name',
-					'persons.last_name',
-					'persons.personal_email',
-					'persons.primary_phone',
+					'id',
+					'member_number',
+					'status',
+					'first_name',
+					'last_name',
+					'email',
+					'phone',
 				])
+				.where('deleted_at', 'is', null)
 				.where((eb) =>
 					eb.or([
-						eb('members.member_number', 'ilike', `%${query}%`),
-						eb('persons.first_name', 'ilike', `%${query}%`),
-						eb('persons.last_name', 'ilike', `%${query}%`),
-						eb('persons.personal_email', 'ilike', `%${query}%`),
-						eb('persons.primary_phone', 'ilike', `%${query}%`),
+						eb('member_number', 'ilike', `%${query}%`),
+						eb('first_name', 'ilike', `%${query}%`),
+						eb('last_name', 'ilike', `%${query}%`),
+						eb('email', 'ilike', `%${query}%`),
+						eb('phone', 'ilike', `%${query}%`),
 					])
 				)
-				.orderBy('members.created_at', 'desc')
+				.orderBy('created_at', 'desc')
 				.limit(50)
 				.execute(),
 			'search',
 			{ query }
 		);
 	}
-
-	/**
-	 * Get Member with Account Details // For later implementation
-	async getMemberWithAccounts(memberId: string) {
-	  return this.db
-		.selectFrom('members')
-		.innerJoin('persons', 'persons.id', 'members.person_id')
-		.leftJoin('accounts', 'accounts.member_id', 'members.id')
-		.select([
-		  'members.id',
-		  'members.member_number',
-		  'members.status',
-		  'persons.first_name',
-		  'persons.last_name',
-		  'persons.personal_email',
-		  'accounts.id as account_id',
-		  'accounts.account_number',
-		  'accounts.account_type',
-		  'accounts.balance',
-		])
-		.where('members.id', '=', memberId)
-		.execute();
-	}   */
-
 }

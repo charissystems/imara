@@ -1,6 +1,14 @@
 import { IdentityDocument, NewIdentityDocument, IdentityDocumentUpdate } from '../database/types';
 import { BaseRepository } from './baseRepository';
 
+/**
+ * Repository for identity documents.
+ *
+ * Column reference (identity_documents table):
+ *   id, member_id, document_type, document_number, issue_date, expiry_date,
+ *   document_url, document_data, is_verified (boolean), verified_by, verified_at,
+ *   created_by, created_at, updated_at, deleted_at
+ */
 export class DocumentRepository extends BaseRepository {
 
     async create(document: NewIdentityDocument): Promise<IdentityDocument> {
@@ -11,20 +19,21 @@ export class DocumentRepository extends BaseRepository {
                 .returningAll()
                 .executeTakeFirstOrThrow(),
             'create',
-            { personId: document.person_id, documentType: document.document_type }
+            { memberId: document.member_id, documentType: document.document_type }
         );
     }
 
-    async findByPersonId(personId: string): Promise<IdentityDocument[]> {
+    async findByMemberId(memberId: string): Promise<IdentityDocument[]> {
         return this.executeSafely(
             () => this.db
                 .selectFrom('identity_documents')
                 .selectAll()
-                .where('person_id', '=', personId)
+                .where('member_id', '=', memberId)
+                .where('deleted_at', 'is', null)
                 .orderBy('created_at', 'desc')
                 .execute(),
-            'findByPersonId',
-            { personId }
+            'findByMemberId',
+            { memberId }
         );
     }
 
@@ -32,8 +41,9 @@ export class DocumentRepository extends BaseRepository {
         return this.executeSafely(
             () => this.db
                 .updateTable('identity_documents')
-                .set(updates)
+                .set({ ...updates, updated_at: new Date() })
                 .where('id', '=', id)
+                .where('deleted_at', 'is', null)
                 .returningAll()
                 .executeTakeFirstOrThrow(),
             'update',
@@ -43,13 +53,13 @@ export class DocumentRepository extends BaseRepository {
 
     async updateVerificationStatus(
         id: string,
-        status: 'pending' | 'approved' | 'rejected',
+        verified: boolean,
         verifiedBy: string
     ): Promise<IdentityDocument> {
         return this.update(id, {
-            verification_status: status,
+            is_verified: verified,
             verified_by: verifiedBy,
-            verified_at: new Date()
+            verified_at: new Date(),
         });
     }
 }
