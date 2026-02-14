@@ -19,7 +19,7 @@ import { appLogger } from './logger';
  */
 export async function tenantIsolationCheck(c: Context<Env>, next: Next) {
     const tenant = c.get('tenant');
-    const user = c.get('user');
+    const user = (c.get as any)('user');
 
     // Skip checks for anonymous routes
     if (!tenant || !user) {
@@ -66,9 +66,9 @@ export async function tenantIsolationCheck(c: Context<Env>, next: Next) {
     }
 
     // Attach tenant context to request for query building
-    c.set('tenantId', tenant.id);
-    c.set('tenantCode', tenant.code);
-    c.set('schemaName', tenant.schema_name);
+    (c.set as any)('tenantId', tenant.id);
+    (c.set as any)('tenantCode', tenant.code);
+    (c.set as any)('schemaName', tenant.schema_name);
 
     appLogger.debug('Tenant isolation check passed', {
         tenant_id: tenant.id,
@@ -84,7 +84,7 @@ export async function tenantIsolationCheck(c: Context<Env>, next: Next) {
  */
 export async function crossTenantAccessCheck(c: Context<Env>, next: Next) {
     const tenant = c.get('tenant');
-    const user = c.get('user');
+    const user = (c.get as any)('user');
 
     if (!tenant || !user) {
         await next();
@@ -127,7 +127,7 @@ export async function requireTenantFilter(c: Context<Env>, next: Next) {
     }
 
     const tenant = c.get('tenant');
-    const user = c.get('user');
+    const user = (c.get as any)('user');
 
     if (!tenant || !user) {
         await next();

@@ -10,6 +10,9 @@ import { AuditLogger } from './audit';
 export type Variables = {
     // Tenant information
     tenant?: Tenant;
+    tenantId?: string;     // Tenant UUID
+    tenantCode?: string;   // Tenant code/subdomain
+    schemaName?: string;   // Tenant schema name
     
     // Tenant-specific database connection
     db?: Kysely<TenantDatabase>;
@@ -22,13 +25,36 @@ export type Variables = {
     validatedData?: any;
     
     // Current user (when auth is implemented)
-    currentUser?: {
+    user?: {
         id: string;
         email: string;
         staffNumber: string;
         role?: string;
         memberId?: string;
         staffId?: string;
+        tenant_id?: string;
+        deleted_at?: string | null;
+    };
+    
+    // Subscription and usage limits info
+    subscriptionWarning?: {
+        type: 'EXPIRING_SOON' | 'EXPIRED' | 'NONE';
+        message: string;
+        tenant_id?: string;
+    };
+    
+    userLimitInfo?: {
+        current_count: number;
+        limit: number;
+        percentage_used: number;
+        tenant_id?: string;
+    };
+    
+    memberLimitWarning?: {
+        type: 'CRITICAL' | 'WARNING' | 'NONE';
+        current_count: number;
+        limit: number;
+        tenant_id?: string;
     };
     
     // Audit logger for tracking changes

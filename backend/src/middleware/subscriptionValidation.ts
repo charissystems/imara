@@ -14,6 +14,7 @@ import { Env } from './types';
 import { ForbiddenError } from './errorHandler';
 import { appLogger } from './logger';
 import { publicDb } from '../config/database';
+import { dbManager } from '../config/database';
 
 /**
  * Subscription tier feature matrix
@@ -98,9 +99,10 @@ export async function validateSubscription(c: Context<Env>, next: Next) {
         );
 
         if (daysUntilExpiry <= 7 && daysUntilExpiry > 0) {
-            c.set('subscriptionWarning', {
+            (c.set as any)('subscriptionWarning', {
+                type: 'EXPIRING_SOON' as const,
                 message: `Your subscription expires in ${daysUntilExpiry} days`,
-                daysRemaining: daysUntilExpiry,
+                tenant_id: tenant.id,
             });
         }
     }
@@ -137,13 +139,13 @@ export async function validateUserLimit(c: Context<Env>, next: Next) {
 
     // Get current user count for this tenant
     try {
-        // This query assumes a tenant schema context
-        const result = await publicDb.raw(
-            `SELECT COUNT(*) as count FROM ${tenant.schema_name}.staff 
-             WHERE deleted_at IS NULL`
+        // This query counts active staff in the tenant schema
+        const result = await dbManager.executeRaw<{ count: string }>(
+            tenant.schema_name,
+            'SELECT COUNT(*) as count FROM staff WHERE deleted_at IS NULL'
         );
 
-        const currentUsers = result.rows?.[0]?.count || 0;
+        const currentUsers = parseInt(result.rows?.[0]?.count as string) || 0;
 
         if (currentUsers >= tenant.max_users) {
             appLogger.warn('User limit reached', {
@@ -158,13 +160,14 @@ export async function validateUserLimit(c: Context<Env>, next: Next) {
             );
         }
 
-        c.set('userLimitInfo', {
-            current: currentUsers,
-            max: tenant.max_users,
-            remaining: tenant.max_users - currentUsers,
+        (c.set as any)('userLimitInfo', {
+            current_count: currentUsers,
+            limit: tenant.max_users,
+            percentage_used: (currentUsers / tenant.max_users) * 100,
+            tenant_id: tenant.id,
         });
     } catch (error) {
-        appLogger.error('Failed to validate user limit', {
+        appLogger.error('Failed to validate user limit', undefined, {
             tenant_id: tenant.id,
             error: error instanceof Error ? error.message : 'Unknown error',
         });
@@ -199,12 +202,12 @@ export async function validateMemberLimit(c: Context<Env>, next: Next) {
 
     try {
         // Get current member count
-        const result = await publicDb.raw(
-            `SELECT COUNT(*) as count FROM ${tenant.schema_name}.members 
-             WHERE deleted_at IS NULL`
+        const result = await dbManager.executeRaw<{ count: string }>(
+            tenant.schema_name,
+            'SELECT COUNT(*) as count FROM members WHERE deleted_at IS NULL'
         );
 
-        const currentMembers = result.rows?.[0]?.count || 0;
+        const currentMembers = parseInt(result.rows?.[0]?.count as string) || 0;
 
         if (currentMembers >= tenant.max_members) {
             appLogger.warn('Member limit reached', {
@@ -222,15 +225,15 @@ export async function validateMemberLimit(c: Context<Env>, next: Next) {
         // Warn if approaching limit (>80%)
         const percentageUsed = (currentMembers / tenant.max_members) * 100;
         if (percentageUsed > 80) {
-            c.set('memberLimitWarning', {
-                message: `You've used ${Math.round(percentageUsed)}% of your member limit`,
-                currentMembers,
-                maxMembers: tenant.max_members,
-                percentageUsed,
+            (c.set as any)('memberLimitWarning', {
+                type: 'WARNING' as const,
+                current_count: currentMembers,
+                limit: tenant.max_members,
+                tenant_id: tenant.id,
             });
         }
     } catch (error) {
-        appLogger.error('Failed to validate member limit', {
+        appLogger.error('Failed to validate member limit', undefined, {
             tenant_id: tenant.id,
             error: error instanceof Error ? error.message : 'Unknown error',
         });
