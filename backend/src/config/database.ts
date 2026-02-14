@@ -131,7 +131,10 @@ export class DatabaseManager {
         const client = await this.pool.connect();
         try {
             if (schemaName !== 'public') {
-                await client.query('SET search_path TO $1, public', [schemaName]);
+                // SET does not support parameterised values; validate the
+                // identifier to prevent SQL injection then interpolate it.
+                const safeName = schemaName.replace(/[^a-zA-Z0-9_]/g, '');
+                await client.query(`SET search_path TO "${safeName}", public`);
             }
             const result = await client.query(queryText, parameters);
             console.log(`📄 [RAW SQL]: ${result.rowCount} rows affected`);
