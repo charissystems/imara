@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "tsx --watch src/server.ts",
     "start": "tsx src/server.ts",
-    "test": "vitest",
+    "test": "vitest run",
     "test:run": "vitest run",
     "test:unit": "vitest run --exclude tests/integration/**",
     "test:integration": "vitest run tests/integration/",
