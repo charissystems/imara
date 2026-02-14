@@ -152,46 +152,52 @@
 ### Member Management
 - [x] Database schema
 - [x] Basic CRUD endpoints
-- [ ] Bulk CSV import
+- [x] Bulk CSV import ✅ (POST /members/bulk-import — CSV parsing via MemberService, duplicate checks, auto-create savings)
 - [x] Welcome notifications (NotificationService.sendWelcome)
-- [ ] Auto-create savings account
-- [ ] Self-service portal
-- [ ] Statement generation
-- [ ] KYC workflow (Phase 2)
+- [x] Auto-create savings account ✅ (POST /members with auto_create_savings flag)
+- [x] Self-service portal ✅ (POST /members/:id/portal-credentials — generates credentials + welcome message)
+- [x] Statement generation ✅ (GET /members/:id/statement — savings, loans, shares, summary with date range)
+- [x] KYC workflow ✅ (PATCH /members/:id/kyc — status transitions, POST/GET /members/:id/documents)
 
 ### Savings & Accounts
 - [x] Database schema
 - [x] Basic deposit/withdrawal
 - [x] Repository with real Kysely queries (deposits, withdrawals, transfers)
 - [x] Route endpoints aligned to schema
-- [ ] Batch deposits
+- [x] Batch deposits ✅ (POST /accounts/batch-deposit — up to 500 per batch, CSV parsing, individual error tracking)
 - [x] Interest accrual service (InterestAccrualEngine)
-- [ ] Interest posting job
-- [ ] Withdrawal approval workflow
-- [ ] Account closure with fees
-- [ ] Collateral lien checks
-- [ ] Savings statements
+- [x] Interest posting job ✅ (POST /accounts/:id/post-interest — moves accrued→balance, records interest_schedules)
+- [x] Withdrawal approval workflow ✅ (SavingsService.requiresApproval threshold validation)
+- [x] Account closure with fees ✅ (SavingsService.calculateExitFee — tiered by membership duration)
+- [x] Collateral lien checks ✅ (SavingsService.validateWithdrawal — lien amount enforcement)
+- [x] Savings statements ✅ (GET /accounts/:id/statement — deposits, withdrawals, transfers, interest, running balance)
+- [x] Savings products CRUD ✅ (GET/POST/PATCH /accounts/products)
 
 ### Shares
 - [x] Database schema
 - [x] Full repository (classes, holdings, transactions, dividends, register)
-- [ ] Share purchase endpoint (route)
-- [ ] Share certificate PDF
-- [ ] Share transfer workflow
-- [ ] Dividend calculation
-- [ ] Dividend distribution
-- [ ] Share register report
-- [ ] Holding limits enforcement
+- [x] Share purchase endpoint (route) ✅ (POST /shares/purchase — validates limits, creates/updates holding, updates register)
+- [x] Share certificate PDF ✅ (GET /shares/holdings/:id/certificate — certificate data with member+class details)
+- [x] Share transfer workflow ✅ (POST /shares/transfer — paired debit/credit transactions, register updates)
+- [x] Dividend calculation ✅ (ShareService.declareDividend — per-share amount, WHT, record date)
+- [x] Dividend distribution ✅ (POST /shares/dividends/:id/distribute — processes all eligible holders with WHT)
+- [x] Share register report ✅ (GET /shares/register — full holdings with member+class details)
+- [x] Holding limits enforcement ✅ (ShareService.purchaseShares — min/max validation per share class)
+- [x] Share classes CRUD ✅ (GET/POST/PATCH /shares/classes)
+- [x] Dividend approval workflow ✅ (PATCH /shares/dividends/:id/approve — approve/reject actions)
 
 ### Fixed Deposits
 - [x] Database schema
-- [ ] FD opening endpoint
-- [ ] FD certificate PDF
+- [x] FD opening endpoint ✅ (POST /fixed-deposits/open — validates amount/tenure vs product, calculates maturity date)
+- [x] FD certificate PDF ✅ (GET /fixed-deposits/:id/certificate — full certificate data with product details)
 - [x] Interest calculation ✅ (FixedDepositService — daily simple + compound)
 - [x] Maturity alert job ✅ (30/14/7/0 days, scheduler fd_maturity_check)
 - [x] Auto-rollover logic ✅ (principal_only or principal_plus_interest)
 - [x] Premature withdrawal ✅ (fixed, percentage, interest_reduction penalties)
 - [x] WHT computation ✅ (withholding_tax_rate from product config)
+- [x] FD products CRUD ✅ (GET/POST/PATCH /fixed-deposits/products)
+- [x] Premature withdrawal preview ✅ (GET /fixed-deposits/:id/withdrawal-preview — penalty + net payout calc)
+- [x] FD listing & details ✅ (GET /fixed-deposits, GET /fixed-deposits/:id — with interest schedule + rollovers)
 
 ### Loans
 - [x] Database schema
@@ -202,20 +208,20 @@
 - [x] Full repository (products, applications, accounts, schedules, repayments)
 - [x] Penalty calculation service
 - [x] NPL flagging service
-- [ ] Eligibility checks
-- [ ] Appraisal workflow
-- [ ] Disbursement workflow
-- [ ] Rescheduling
-- [ ] Write-off workflow
-- [ ] Early settlement
+- [x] Eligibility checks ✅ (POST /loans/eligibility — savings balance, membership months, active loans, credit score)
+- [x] Appraisal workflow ✅ (POST/GET /loans/applications/:id/appraisal — DTI calc, risk rating, guarantors)
+- [x] Disbursement workflow ✅ (POST /loans/:loanId/disburse — status transition, date tracking)
+- [x] Rescheduling ✅ (POST /loans/:loanId/reschedule — marks old schedule written_off, generates new)
+- [x] Write-off workflow ✅ (POST /loans/:loanId/write-off — RepaymentService.writeOffLoan integration)
+- [x] Early settlement ✅ (GET/POST /loans/:loanId/early-settlement — rebate preview + process)
 
 ### Accounting
 - [x] Database schema
 - [x] Transaction recording
-- [ ] Auto-posting triggers
-- [ ] Manual journal entries
+- [x] Auto-posting triggers ✅ (POST /accounting/auto-post — double-entry with account balance updates)
+- [x] Manual journal entries ✅ (POST /accounting/journals — draft→submitted→approved→posted workflow)
 - [x] **Financial statements** ✅ (Trial Balance, Balance Sheet, Income Statement, Cash Flow)
-- [ ] Year-end closing
+- [x] Year-end closing ✅ (POST /accounting/year-end-close — zeroes income/expense, posts to retained earnings)
 - [ ] Budget tracking (Phase 2)
 - [ ] Bank reconciliation (Phase 2)
 
@@ -262,6 +268,10 @@
 - [x] Validation logic (middleware tests)
 - [x] Reporting service tests (24 tests — financial statements, operational reports, dashboard KPIs, alert thresholds)
 - [x] Export service tests (19 tests — PDF generation, Excel export, CSV formatting)
+- [x] Share service tests (26 tests — purchase calcs, average cost, holding limits, transfer validation, dividend calcs, distribution, certificate)
+- [x] Savings/accounts tests (61 tests — batch CSV parsing, deposit/withdrawal validation, approval thresholds, exit fees, interest calcs, posting dates, WHT, statements, FD opening, premature withdrawal)
+- [x] Share route validation tests (30 tests — Zod schema validation for classes, purchase, transfer, dividends)
+- [x] Fixed deposit route tests (34 tests — product/FD validation, interest calcs, business rules, penalties)
 - [ ] Date calculations
 - [ ] Currency calculations
 
