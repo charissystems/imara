@@ -123,6 +123,18 @@ export type {
     PrematureWithdrawalResult,
 } from './fixedDepositService';
 
+// Share Service
+export { ShareService } from './shareService';
+export type {
+    SharePurchaseInput,
+    SharePurchaseResult,
+    ShareTransferInput,
+    ShareTransferResult,
+    DividendCalculationInput,
+    DividendDistributionResult,
+    ShareCertificateData,
+} from './shareService';
+
 // Two-Factor Authentication Service
 export { TwoFactorService } from './twoFactorService';
 export type {
