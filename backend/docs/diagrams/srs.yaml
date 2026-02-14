@@ -1,0 +1,1386 @@
+project:
+  name: Imara SACCO Management System
+  version: "1.0"
+  description: >
+    A multi-tenant, cloud-based SaaS platform to digitize and automate all core
+    operations of savings and credit cooperatives (SACCOs), savings groups, MFIs,
+    VSLAs, and staff SACCOs.
+  status: draft
+  audience:
+    - Development Team
+    - Stakeholders
+  references:
+    - SaccoSys Platform: https://saccosys.com/features
+    - SaccoWave Platform: https://www.saccowave.com
+    - ISO/IEC 25010:2011
+    - OWASP Top 10
+    - Bank of Uganda SACCO Regulatory Framework
+    - ISO 27001
+
+# ─────────────────────────────────────────────────────────────
+# PRIORITY LEGEND
+# must   → MVP — system unusable without it
+# should → Phase 2 — high value, not MVP-blocking
+# could  → Phase 3 — nice-to-have, if time/budget permits
+# wont   → Explicitly out of scope this release
+# ─────────────────────────────────────────────────────────────
+
+tech_stack:
+  backend:
+    framework: Hono (Node.js)
+    style: RESTful microservices
+    api_docs: OpenAPI 3.0
+  frontend:
+    web: React.js or Vue.js with TypeScript
+    mobile: Flutter (single codebase Android + iOS)
+  database:
+    primary: PostgreSQL
+    cache: Redis
+    file_storage: S3-compatible object storage
+  messaging:
+    queue: RabbitMQ or AWS SQS
+    sms_primary: Africa's Talking
+    sms_failover: Twilio
+    email: SendGrid or AWS SES
+    push: Firebase (Android) + APNs (iOS)
+  auth:
+    tokens: JWT + OAuth 2.0
+    two_factor: SMS OTP or TOTP authenticator app
+  infrastructure:
+    cloud: AWS or GCP
+    containers: Docker / Kubernetes
+    iac: Terraform
+    ci_cd: GitHub Actions
+  monitoring:
+    metrics: Prometheus + Grafana
+    errors: Sentry
+    uptime: Status page (UptimeRobot or equivalent)
+
+integrations:
+  mobile_money:
+    - provider: MTN Mobile Money
+      capabilities: [collection, disbursement, reconciliation, reversal]
+    - provider: Airtel Money
+      capabilities: [collection, disbursement, reconciliation, reversal]
+  banking:
+    - provider: Bank APIs (configurable)
+      capabilities: [agency_banking, teller_cash_management, bank_statement_import]
+  erp:
+    - provider: Odoo
+      method: REST API
+      capabilities: [accounting_data_sync]
+  kyc:
+    - provider: National ID Verification API
+      capabilities: [identity_check, document_verification]
+  ussd:
+    - provider: Telecoms (configurable short code)
+      capabilities: [balance_enquiry, transactions, pin_management]
+
+environment:
+  operating:
+    browser_support: [Chrome 90+, Firefox 88+, Edge 90+, Safari 14+]
+    mobile_android: API 26+ (Android 8.0+)
+    mobile_ios: iOS 14+
+    encoding: UTF-8
+    connectivity: Offline-capable for critical mobile features; syncs on reconnect
+  assumptions:
+    - SACCO has a registered legal entity and mobile money merchant account
+    - MTN and Airtel Money API contracts are in place
+    - Regulatory reporting targets Bank of Uganda (adaptable to Kenya/Tanzania)
+    - Internet available at SACCO offices; mobile data available to members
+
+# ─────────────────────────────────────────────────────────────
+# MODULES & REQUIREMENTS
+# ─────────────────────────────────────────────────────────────
+
+modules:
+
+  # ───────────────────────────────────────────────
+  # 1. MEMBER MANAGEMENT
+  # ───────────────────────────────────────────────
+  member_management:
+    description: Full member lifecycle from registration to exit.
+
+    registration_and_onboarding:
+      requirements:
+        - id: MEM-001
+          description: >
+            Capture comprehensive member profile: full name, DOB, gender, nationality,
+            NIN/passport, physical address, postal address, occupation, employer, and photo.
+          priority: must
+
+        - id: MEM-002
+          description: >
+            Support multiple ID document types (NIN, Passport, Driving Permit, Refugee ID)
+            with document scan upload.
+          priority: must
+
+        - id: MEM-003
+          description: >
+            Auto-generate a unique member number on registration using a configurable
+            format (prefix + sequential integer).
+          priority: must
+
+        - id: MEM-004
+          description: >
+            Support digital KYC with selfie capture and ID document verification
+            via third-party API integration.
+          priority: should
+
+        - id: MEM-005
+          description: >
+            Capture next-of-kin details: name, relationship, contact number,
+            and percentage share of benefits.
+          priority: must
+
+        - id: MEM-006
+          description: >
+            Support corporate/group member registration with authorised
+            signatory management.
+          priority: should
+
+        - id: MEM-007
+          description: >
+            Bulk member import via Excel/CSV template with field-level data
+            validation and error reporting.
+          priority: must
+
+        - id: MEM-008
+          description: >
+            Send welcome SMS/email on successful registration containing
+            account number and initial PIN.
+          priority: must
+
+        - id: MEM-009
+          description: >
+            Track member lifecycle status: Pending | Active | Suspended |
+            Dormant | Deceased | Exited.
+          priority: must
+
+        - id: MEM-010
+          description: >
+            Maintain immutable member audit log of all profile changes with
+            timestamp and user attribution.
+          priority: must
+
+    accounts:
+      requirements:
+        - id: MEM-011
+          description: >
+            Auto-create a savings account for each approved member; additional
+            account types (shares, loan, fixed deposit) created on demand.
+          priority: must
+
+        - id: MEM-012
+          description: >
+            Allow one member to hold multiple named savings accounts
+            (e.g., regular, holiday, emergency).
+          priority: should
+
+        - id: MEM-013
+          description: >
+            Support group/chama accounts linked to multiple members with
+            configurable co-signatories.
+          priority: should
+
+        - id: MEM-014
+          description: >
+            Allow members to nominate beneficiaries and specify benefit
+            percentages per account.
+          priority: must
+
+        - id: MEM-015
+          description: >
+            Enforce configurable minimum balance requirements per account type.
+          priority: must
+
+    self_service_portal:
+      requirements:
+        - id: MEM-016
+          description: >
+            Members access a secure web portal to view balances, statements,
+            loan schedules, and share certificates.
+          priority: must
+
+        - id: MEM-017
+          description: >
+            Members can initiate loan applications, savings deposits, and
+            withdrawal requests via the portal.
+          priority: should
+
+        - id: MEM-018
+          description: >
+            Members can update limited profile fields (phone, email, postal address)
+            subject to SACCO approval workflow.
+          priority: should
+
+        - id: MEM-019
+          description: >
+            Members can download official account statements in PDF from the portal.
+          priority: must
+
+  # ───────────────────────────────────────────────
+  # 2. SAVINGS & WITHDRAWALS
+  # ───────────────────────────────────────────────
+  savings_and_withdrawals:
+    description: All savings inflows, outflows, transfers, and interest management.
+
+    deposits:
+      requirements:
+        - id: SAV-001
+          description: >
+            Support deposit channels: cash (teller), mobile money, bank transfer,
+            standing order, and payroll deduction.
+          priority: must
+
+        - id: SAV-002
+          description: Post deposits in real time; immediately update member account balance.
+          priority: must
+
+        - id: SAV-003
+          description: >
+            Generate a unique transaction reference per deposit with a printable receipt.
+          priority: must
+
+        - id: SAV-004
+          description: >
+            Support batch/bulk deposits (employer payroll deductions) via Excel import or API.
+          priority: must
+
+        - id: SAV-005
+          description: >
+            Validate deposit amounts against min/max limits configured per savings product.
+          priority: must
+
+        - id: SAV-006
+          description: >
+            Auto-allocate split deposits across multiple account types
+            (savings, loan repayment, shares) per member standing instructions.
+          priority: should
+
+    withdrawals:
+      requirements:
+        - id: SAV-007
+          description: >
+            Enforce configurable withdrawal approval workflows by amount threshold
+            (e.g., above UGX 500,000 requires manager approval).
+          priority: must
+
+        - id: SAV-008
+          description: >
+            Validate withdrawal against: available balance, minimum balance,
+            and any lien/hold amounts.
+          priority: must
+
+        - id: SAV-009
+          description: Support withdrawal to mobile money, bank account, or cash (teller).
+          priority: must
+
+        - id: SAV-010
+          description: >
+            Block withdrawal where savings are pledged as loan collateral until
+            the related loan is cleared.
+          priority: must
+
+        - id: SAV-011
+          description: >
+            Support partial and full account closure withdrawals with
+            configurable exit fee computation.
+          priority: must
+
+    transfers:
+      requirements:
+        - id: SAV-012
+          description: >
+            Allow intra-member account transfers (e.g., savings to loan repayment).
+          priority: must
+
+        - id: SAV-013
+          description: >
+            Allow inter-member transfers within the same SACCO with dual authorisation.
+          priority: should
+
+        - id: SAV-014
+          description: >
+            Log all transfers with full traceability: source account, destination account,
+            initiator, and approver.
+          priority: must
+
+    interest:
+      requirements:
+        - id: SAV-015
+          description: >
+            Support interest calculation methods: simple interest, compound interest,
+            and tiered interest by balance band.
+          priority: must
+
+        - id: SAV-016
+          description: >
+            Accrue interest daily; post to member accounts on configurable cycle
+            (monthly / quarterly / annually).
+          priority: must
+
+        - id: SAV-017
+          description: >
+            Support multiple savings products with distinct interest rates,
+            notice periods, and minimum balances.
+          priority: must
+
+        - id: SAV-018
+          description: >
+            Compute and deduct Withholding Tax (WHT) on savings interest where applicable;
+            generate WHT certificates.
+          priority: should
+
+        - id: SAV-019
+          description: >
+            Auto-charge dormancy fees on accounts inactive beyond a configurable period.
+          priority: should
+
+  # ───────────────────────────────────────────────
+  # 3. SHARES MODULE
+  # ───────────────────────────────────────────────
+  shares:
+    description: Share capital management, certificates, transfers, and dividend distribution.
+
+    requirements:
+      - id: SHA-001
+        description: >
+          Support multiple share classes (ordinary, preference) with configurable par values.
+        priority: must
+
+      - id: SHA-002
+        description: >
+          Record share purchases: number of shares, unit price, and payment channel.
+        priority: must
+
+      - id: SHA-003
+        description: >
+          Enforce configurable minimum and maximum share holding limits per member.
+        priority: must
+
+      - id: SHA-004
+        description: >
+          Support share transfers between members with authorisation workflow.
+        priority: should
+
+      - id: SHA-005
+        description: >
+          Generate and store digital share certificates, printable as PDF.
+        priority: must
+
+      - id: SHA-006
+        description: >
+          Compute dividends at period-end based on weighted average share holdings
+          over the fiscal year.
+        priority: must
+
+      - id: SHA-007
+        description: >
+          Support bonus share issuance (capitalisation from retained earnings).
+        priority: should
+
+      - id: SHA-008
+        description: >
+          Support share retirement/buy-back for exiting members with lock-in
+          period enforcement.
+        priority: must
+
+      - id: SHA-009
+        description: Maintain a share register showing all historic transactions per member.
+        priority: must
+
+      - id: SHA-010
+        description: Deduct WHT on dividends and generate tax certificates.
+        priority: should
+
+  # ───────────────────────────────────────────────
+  # 4. FIXED DEPOSITS
+  # ───────────────────────────────────────────────
+  fixed_deposits:
+    description: Term deposit management with maturity tracking and interest computation.
+
+    requirements:
+      - id: FD-001
+        description: >
+          Support FD products with configurable: tenure (days/months/years), interest rate,
+          minimum amount, interest payment frequency, and auto-rollover settings.
+        priority: must
+
+      - id: FD-002
+        description: Issue a unique FD certificate number per deposit, printable as PDF.
+        priority: must
+
+      - id: FD-003
+        description: >
+          Calculate interest on a 365-day year (or 360-day, configurable) using
+          simple or compound methods.
+        priority: must
+
+      - id: FD-004
+        description: >
+          Send automated maturity alerts to members and staff at 30, 14, and 7 days
+          before maturity via SMS/email.
+        priority: must
+
+      - id: FD-005
+        description: >
+          Support partial premature withdrawal with penalty fee computation
+          as configured per product.
+        priority: should
+
+      - id: FD-006
+        description: >
+          Support auto-rollover options at maturity: principal only,
+          principal + interest, or custom amount.
+        priority: must
+
+      - id: FD-007
+        description: Compute and deduct WHT on FD interest; generate tax certificates.
+        priority: should
+
+      - id: FD-008
+        description: >
+          Maintain a full FD ledger showing accrued, paid, and outstanding interest
+          per deposit.
+        priority: must
+
+  # ───────────────────────────────────────────────
+  # 5. LOAN MANAGEMENT
+  # ───────────────────────────────────────────────
+  loan_management:
+    description: >
+      Full credit lifecycle: product config, application, appraisal, approval,
+      disbursement, repayment, and recovery.
+
+    loan_products:
+      requirements:
+        - id: LON-001
+          description: >
+            Support unlimited loan products with configurable: name, min/max amount,
+            tenure, interest rate, interest method (flat | declining EMI |
+            declining equal principal), fees, and eligibility criteria.
+          priority: must
+
+        - id: LON-002
+          description: >
+            Support interest rate types: fixed, variable (linked to base rate),
+            and promotional (time-limited).
+          priority: should
+
+        - id: LON-003
+          description: >
+            Support loan product categories: emergency, short-term, long-term,
+            business, salary advance, school fees, etc.
+          priority: must
+
+        - id: LON-004
+          description: >
+            Enforce eligibility rules per product: minimum savings multiplier,
+            minimum membership duration, maximum concurrent active loans,
+            and credit score threshold.
+          priority: must
+
+    application_and_appraisal:
+      requirements:
+        - id: LON-005
+          description: >
+            Digital loan application form capturing: product, amount, purpose,
+            tenure, collateral details, and guarantor details.
+          priority: must
+
+        - id: LON-006
+          description: >
+            Auto-compute maximum loanable amount based on savings multiplier
+            and repayment capacity.
+          priority: must
+
+        - id: LON-007
+          description: >
+            Support document attachments to applications: payslips, business
+            records, property valuations.
+          priority: must
+
+        - id: LON-008
+          description: >
+            Support multiple guarantors per loan with guarantee amount allocation
+            and guarantor consent tracking.
+          priority: must
+
+        - id: LON-009
+          description: >
+            Support collateral registration: type, description, estimated value,
+            market value, charge type (first/second), and document upload.
+          priority: must
+
+        - id: LON-010
+          description: >
+            Compute a configurable credit score based on: repayment history,
+            savings behaviour, income, and membership duration.
+          priority: should
+
+        - id: LON-011
+          description: >
+            Run automated eligibility checks and surface pass/fail results
+            with reasons during appraisal.
+          priority: must
+
+        - id: LON-012
+          description: >
+            Generate a printable/exportable loan appraisal report in PDF.
+          priority: must
+
+    approval_workflow:
+      requirements:
+        - id: LON-013
+          description: >
+            Support configurable multi-stage approval workflows (e.g., Loan Officer →
+            Credit Committee → Board) with amount-based routing rules.
+          priority: must
+
+        - id: LON-014
+          description: >
+            Each approval stage supports actions: Approve | Reject |
+            Request More Info | Refer Up.
+          priority: must
+
+        - id: LON-015
+          description: >
+            Notify applicants and approvers at each workflow stage via
+            SMS, email, and push notification.
+          priority: must
+
+        - id: LON-016
+          description: >
+            Maintain a full approval history log: actor, timestamp, action,
+            and attached notes.
+          priority: must
+
+        - id: LON-017
+          description: >
+            Support batch approval of multiple loans by authorised approvers.
+          priority: should
+
+    disbursement:
+      requirements:
+        - id: LON-018
+          description: >
+            Disburse approved loans via: cash (teller), credit to member savings account,
+            mobile money, or bank transfer.
+          priority: must
+
+        - id: LON-019
+          description: >
+            Generate a pre-populated loan agreement document pending
+            digital or physical signature.
+          priority: must
+
+        - id: LON-020
+          description: >
+            Generate and make available a full loan repayment schedule
+            upon disbursement for member and staff.
+          priority: must
+
+        - id: LON-021
+          description: >
+            Support partial disbursement of approved loan amounts where applicable.
+          priority: should
+
+    repayment_and_recovery:
+      requirements:
+        - id: LON-022
+          description: >
+            Accept repayments via all deposit channels; auto-allocate payments
+            in configurable order (default: penalties → interest → principal).
+          priority: must
+
+        - id: LON-023
+          description: >
+            Auto-compute and post penalty fees for overdue instalments on a
+            configurable schedule (daily / weekly / monthly).
+          priority: must
+
+        - id: LON-024
+          description: >
+            Send automated repayment reminders via SMS/email before and after
+            each due date.
+          priority: must
+
+        - id: LON-025
+          description: >
+            Support loan rescheduling: extend tenure, restructure outstanding balance,
+            or capitalise arrears, with full audit trail.
+          priority: must
+
+        - id: LON-026
+          description: >
+            Support loan write-off with appropriate GL entries and audit record.
+          priority: must
+
+        - id: LON-027
+          description: >
+            Support forced recovery from guarantor savings accounts with
+            notification and authorisation gate.
+          priority: should
+
+        - id: LON-028
+          description: >
+            Flag loans as NPL (Non-Performing Loan) based on configurable
+            overdue days thresholds.
+          priority: must
+
+        - id: LON-029
+          description: >
+            Support loan top-up: add to an existing active loan
+            and recompute the repayment schedule.
+          priority: should
+
+        - id: LON-030
+          description: >
+            Support early full and partial loan settlement with
+            configurable interest rebate computation.
+          priority: should
+
+  # ───────────────────────────────────────────────
+  # 6. INCOME & EXPENSES (ACCOUNTING)
+  # ───────────────────────────────────────────────
+  income_and_expenses:
+    description: Full double-entry accounting for the SACCO's own finances.
+
+    requirements:
+      - id: ACC-001
+        description: >
+          Maintain a configurable Chart of Accounts (CoA) supporting:
+          assets, liabilities, equity, income, and expense account types.
+        priority: must
+
+      - id: ACC-002
+        description: >
+          Auto-post all member transactions (deposits, withdrawals, loan disbursements,
+          repayments, interest) as double-entry journal entries.
+        priority: must
+
+      - id: ACC-003
+        description: >
+          Allow manual journal entry creation with mandatory: description, date,
+          debit/credit accounts, and authorisation.
+        priority: must
+
+      - id: ACC-004
+        description: >
+          Support budget creation per expense category with actual vs. budgeted
+          variance tracking.
+        priority: should
+
+      - id: ACC-005
+        description: >
+          Support petty cash management: disbursements, replenishments,
+          and reconciliation.
+        priority: should
+
+      - id: ACC-006
+        description: >
+          Support bank account reconciliation: import bank statements,
+          auto-match transactions, flag unmatched items.
+        priority: should
+
+      - id: ACC-007
+        description: >
+          Categorise SACCO income from: loan interest, membership fees,
+          penalties, investment income, and service charges.
+        priority: must
+
+      - id: ACC-008
+        description: >
+          Generate standard financial statements: Balance Sheet, Income Statement (P&L),
+          Cash Flow Statement, and Trial Balance.
+        priority: must
+
+      - id: ACC-009
+        description: >
+          Support fiscal year configuration and year-end closing with
+          retained earnings calculation.
+        priority: must
+
+      - id: ACC-010
+        description: >
+          Support multi-currency transactions with configurable exchange rates.
+        priority: could
+
+  # ───────────────────────────────────────────────
+  # 7. DIGITAL BANKING CHANNELS
+  # ───────────────────────────────────────────────
+  digital_channels:
+    description: All member-facing digital touchpoints.
+
+    mobile_app:
+      platforms: [Android, iOS]
+      requirements:
+        - id: MOB-001
+          description: Provide native Android and iOS mobile applications for members.
+          priority: must
+
+        - id: MOB-002
+          description: >
+            App supports: balance enquiry, mini statement, full statement,
+            savings deposit via mobile money, loan application, loan repayment,
+            share purchase, and inter-account transfer.
+          priority: must
+
+        - id: MOB-003
+          description: >
+            Support biometric login (fingerprint, Face ID) in addition to PIN.
+          priority: should
+
+        - id: MOB-004
+          description: >
+            Offline mode for balance viewing and transaction queuing;
+            sync when connectivity is restored.
+          priority: should
+
+        - id: MOB-005
+          description: >
+            Push notifications for all transactions, approvals, and alerts.
+          priority: must
+
+    ussd:
+      requirements:
+        - id: USSD-001
+          description: >
+            Provide a USSD menu (*XXX#) accessible on any basic phone
+            without internet or smartphone.
+          priority: must
+
+        - id: USSD-002
+          description: >
+            USSD menu supports: balance check, mini statement, deposit,
+            withdrawal, loan repayment, and PIN change.
+          priority: must
+
+        - id: USSD-003
+          description: >
+            USSD sessions timeout after 3 minutes of inactivity
+            and require re-authentication.
+          priority: must
+
+        - id: USSD-004
+          description: >
+            All USSD transactions confirmed via 4-digit PIN;
+            SMS receipt issued on completion.
+          priority: must
+
+    digital_wallet:
+      requirements:
+        - id: WAL-001
+          description: >
+            Each member has a digital wallet for instant fund storage and
+            transactions without teller involvement.
+          priority: must
+
+        - id: WAL-002
+          description: >
+            Wallet top-up from: mobile money, savings account, and bank transfer.
+          priority: must
+
+        - id: WAL-003
+          description: Wallet withdrawal to mobile money or bank account.
+          priority: must
+
+        - id: WAL-004
+          description: Wallet shows real-time balance and full transaction history.
+          priority: must
+
+        - id: WAL-005
+          description: >
+            Wallet transfers between members within the same SACCO are instant and free.
+          priority: should
+
+    agency_and_teller_banking:
+      requirements:
+        - id: AGN-001
+          description: >
+            Support agency banking: registered agents process member transactions
+            via a dedicated agent interface on behalf of the SACCO.
+          priority: must
+
+        - id: AGN-002
+          description: >
+            Each agent has a float account; collected funds reduce float and are
+            settled with the SACCO on a configurable schedule.
+          priority: must
+
+        - id: AGN-003
+          description: >
+            Teller interface for branch staff: OTC transaction processing with
+            end-of-day till reconciliation.
+          priority: must
+
+        - id: AGN-004
+          description: >
+            Integrate with bank POS/ATM networks for cash deposit/withdrawal
+            at agent points.
+          priority: could
+
+    mobile_money_integration:
+      requirements:
+        - id: INT-001
+          description: >
+            Integrate with MTN Mobile Money API for collection (MoMo Pay)
+            and disbursement (B2C).
+          priority: must
+
+        - id: INT-002
+          description: >
+            Integrate with Airtel Money API for collection and disbursement.
+          priority: must
+
+        - id: INT-003
+          description: >
+            Auto-reconcile all mobile money transactions with SACCO ledger entries.
+          priority: must
+
+        - id: INT-004
+          description: >
+            Handle failed/reversed mobile money transactions with automatic
+            retry logic and exception management queue.
+          priority: must
+
+        - id: INT-005
+          description: >
+            Support additional payment gateways (bank transfers, card payments)
+            via configurable adapters.
+          priority: should
+
+  # ───────────────────────────────────────────────
+  # 8. MESSAGING CENTRE
+  # ───────────────────────────────────────────────
+  messaging_centre:
+    description: Omnichannel communications — SMS, email, push, and bulk messaging.
+
+    requirements:
+      - id: MSG-001
+        description: >
+          Automated SMS notifications for: deposits, withdrawals, loan disbursements,
+          repayments, maturity alerts, and approval decisions.
+        priority: must
+
+      - id: MSG-002
+        description: >
+          Automated email notifications for: account statements, loan agreements,
+          welcome emails, password resets, and bulk announcements.
+        priority: must
+
+      - id: MSG-003
+        description: >
+          Push notifications to mobile app for all transaction and approval events.
+        priority: must
+
+      - id: MSG-004
+        description: >
+          Bulk messaging tool: compose message, filter recipients (all members |
+          specific group | loan defaulters | etc.), and schedule sends.
+        priority: must
+
+      - id: MSG-005
+        description: >
+          Customisable message templates with merge fields:
+          member name, amount, balance, date, branch, etc.
+        priority: must
+
+      - id: MSG-006
+        description: >
+          Messaging log showing delivery status (sent | delivered | failed)
+          per message per recipient.
+        priority: must
+
+      - id: MSG-007
+        description: >
+          Support multiple SMS gateway providers with configurable failover.
+        priority: should
+
+      - id: MSG-008
+        description: >
+          Loan repayment reminder scheduling: configurable days before and after due date.
+        priority: must
+
+      - id: MSG-009
+        description: >
+          Respect member communication preferences (opt-out) in compliance
+          with data protection regulations.
+        priority: should
+
+  # ───────────────────────────────────────────────
+  # 9. REPORTING & ANALYTICS
+  # ───────────────────────────────────────────────
+  reporting_and_analytics:
+    description: Operational, management, and regulatory reporting.
+
+    standard_reports:
+      requirements:
+        - id: RPT-001
+          description: >
+            Member reports: full listing, new members by period, dormant accounts,
+            exited members.
+          priority: must
+
+        - id: RPT-002
+          description: >
+            Savings reports: summary by product, savings movement register,
+            individual member savings history.
+          priority: must
+
+        - id: RPT-003
+          description: >
+            Shares reports: share register, certificate listing, dividend
+            computation report.
+          priority: must
+
+        - id: RPT-004
+          description: >
+            Fixed deposit reports: active FDs, maturing FDs by date range,
+            WHT deducted report.
+          priority: must
+
+        - id: RPT-005
+          description: >
+            Loan reports: portfolio summary, active loans, disbursement report,
+            repayment report, arrears ageing, NPL report, write-off report.
+          priority: must
+
+        - id: RPT-006
+          description: >
+            Financial reports: Balance Sheet, Income Statement, Trial Balance,
+            Cash Flow Statement, Bank Reconciliation.
+          priority: must
+
+        - id: RPT-007
+          description: >
+            Transaction reports: daily transaction summary, teller till report,
+            mobile money reconciliation report.
+          priority: must
+
+    report_features:
+      requirements:
+        - id: RPT-008
+          description: >
+            All reports filterable by: date range, branch, member group,
+            and product.
+          priority: must
+
+        - id: RPT-009
+          description: All reports exportable in PDF, Excel, and CSV formats.
+          priority: must
+
+        - id: RPT-010
+          description: >
+            Management dashboard showing real-time KPIs: total savings,
+            loans outstanding, PAR (Portfolio At Risk), member count,
+            and today's transactions.
+          priority: must
+
+        - id: RPT-011
+          description: >
+            Dashboard includes visual charts (bar, pie, line) for trend analysis.
+          priority: should
+
+        - id: RPT-012
+          description: >
+            Scheduled report generation with automatic email delivery
+            to configured recipients.
+          priority: should
+
+        - id: RPT-013
+          description: >
+            Generate regulatory reports in formats required by Bank of Uganda
+            (or applicable regulator).
+          priority: should
+
+  # ───────────────────────────────────────────────
+  # 10. SECURITY & AUDIT TRAIL
+  # ───────────────────────────────────────────────
+  security_and_audit:
+    description: Authentication, access control, audit trail, and data protection.
+
+    authentication_and_access:
+      requirements:
+        - id: SEC-001
+          description: >
+            Role-Based Access Control (RBAC) with configurable roles and permissions
+            at module and action level.
+          priority: must
+
+        - id: SEC-002
+          description: >
+            Two-Factor Authentication (2FA) via SMS OTP or authenticator app
+            for all staff accounts.
+          priority: must
+
+        - id: SEC-003
+          description: >
+            Enforce password complexity (min 8 chars, upper/lower/numeric/special)
+            and configurable expiry period.
+          priority: must
+
+        - id: SEC-004
+          description: >
+            Lock accounts after configurable failed login attempts;
+            alert the administrator.
+          priority: must
+
+        - id: SEC-005
+          description: IP whitelisting for admin accounts.
+          priority: should
+
+        - id: SEC-006
+          description: >
+            Sessions expire after a configurable period of inactivity.
+          priority: must
+
+    audit_trail:
+      requirements:
+        - id: AUD-001
+          description: >
+            Log every transaction and system action with: user ID, timestamp,
+            IP address, action type, before-value, and after-value.
+          priority: must
+
+        - id: AUD-002
+          description: >
+            Audit logs are immutable — no user including system admins
+            can modify or delete audit records.
+          priority: must
+
+        - id: AUD-003
+          description: >
+            Searchable audit log viewer filterable by: user, date range,
+            module, and action type.
+          priority: must
+
+        - id: AUD-004
+          description: >
+            Detect and alert on suspicious patterns: repeated failed logins,
+            anomalously large transactions, and off-hours access.
+          priority: should
+
+        - id: AUD-005
+          description: >
+            Transaction reversal log requiring dual authorisation
+            and mandatory reason.
+          priority: must
+
+    data_security:
+      requirements:
+        - id: SEC-007
+          description: All data in transit encrypted with TLS 1.2 or higher.
+          priority: must
+
+        - id: SEC-008
+          description: >
+            All sensitive data at rest (PII, financial records) encrypted
+            with AES-256.
+          priority: must
+
+        - id: SEC-009
+          description: >
+            Member PINs and passwords stored as irreversible hashes (bcrypt/Argon2).
+            Plain-text passwords never stored.
+          priority: must
+
+        - id: SEC-010
+          description: >
+            Automated daily database backups with encrypted off-site storage
+            and tested restore procedures.
+          priority: must
+
+        - id: SEC-011
+          description: >
+            Comply with applicable data protection regulations (GDPR,
+            Uganda Data Protection and Privacy Act 2019).
+          priority: must
+
+        - id: SEC-012
+          description: >
+            Multi-tenant data isolation — one SACCO tenant cannot access
+            another tenant's data under any circumstances.
+          priority: must
+
+  # ───────────────────────────────────────────────
+  # 11. SYSTEM ADMINISTRATION
+  # ───────────────────────────────────────────────
+  system_administration:
+    description: SACCO configuration, multi-branch, users, and platform management.
+
+    requirements:
+      - id: ADM-001
+        description: >
+          SACCO admin configures organisation profile: name, logo, address,
+          contact, registration number, and bank accounts.
+        priority: must
+
+      - id: ADM-002
+        description: >
+          Multi-branch setup with branch-level transaction routing
+          and reporting.
+        priority: should
+
+      - id: ADM-003
+        description: >
+          Configure fiscal year, financial periods, and interest
+          posting schedules.
+        priority: must
+
+      - id: ADM-004
+        description: >
+          Support unlimited user accounts with role assignment
+          and optional branch restriction.
+        priority: must
+
+      - id: ADM-005
+        description: >
+          Configure fee schedules: account maintenance, withdrawal,
+          loan processing, registration, and late payment fees.
+        priority: must
+
+      - id: ADM-006
+        description: >
+          Odoo ERP integration for accounting data sync via REST API.
+        priority: could
+
+      - id: ADM-007
+        description: >
+          System health dashboard for administrators: uptime, error rates,
+          API integration status, and job queue depth.
+        priority: should
+
+      - id: ADM-008
+        description: >
+          Configure and schedule automated system tasks: interest accrual,
+          penalty computation, statement generation, and data archiving.
+        priority: must
+
+      - id: ADM-009
+        description: >
+          Configurable transaction limits per channel (mobile, teller, agent)
+          and per user role.
+        priority: must
+
+      - id: ADM-010
+        description: >
+          White-labelling support: custom domain, app name, brand colours,
+          and logo per SACCO tenant.
+        priority: could
+
+# ─────────────────────────────────────────────────────────────
+# NON-FUNCTIONAL REQUIREMENTS
+# ─────────────────────────────────────────────────────────────
+
+non_functional_requirements:
+
+  performance:
+    - id: NFR-001
+      description: >
+        Web page load time ≤ 3 seconds on a standard 3G connection under normal load.
+      priority: must
+
+    - id: NFR-002
+      description: >
+        Transaction processing (deposit/withdrawal/repayment) completes within
+        5 seconds end-to-end.
+      priority: must
+
+    - id: NFR-003
+      description: >
+        Support ≥ 500 concurrent users without performance degradation.
+      priority: must
+
+    - id: NFR-004
+      description: >
+        Batch jobs (interest accrual, bulk SMS) complete within 30 minutes
+        for up to 10,000 member records.
+      priority: should
+
+    - id: NFR-005
+      description: >
+        Standard 12-month reports generate within 60 seconds.
+      priority: should
+
+  availability_and_reliability:
+    - id: NFR-006
+      description: >
+        Achieve ≥ 99.5% uptime measured monthly, excluding planned maintenance.
+      priority: must
+
+    - id: NFR-007
+      description: >
+        Planned maintenance outside business hours with ≥ 48 hours advance notice.
+      priority: must
+
+    - id: NFR-008
+      description: >
+        Automatic failover for critical services.
+        RTO: 1 hour. RPO: 15 minutes.
+      priority: must
+
+    - id: NFR-009
+      description: >
+        Database replication with at least one hot standby replica.
+      priority: must
+
+  scalability:
+    - id: NFR-010
+      description: >
+        Application servers horizontally scalable without architecture changes.
+      priority: must
+
+    - id: NFR-011
+      description: >
+        Database architecture supports up to 1 million member records
+        without degradation.
+      priority: should
+
+    - id: NFR-012
+      description: Platform supports unlimited SACCO tenants.
+      priority: must
+
+  usability:
+    - id: NFR-013
+      description: >
+        English as primary language; localisation framework supports Luganda,
+        Swahili, and other languages.
+      priority: should
+
+    - id: NFR-014
+      description: >
+        Web interface fully responsive across desktop, tablet, and mobile viewports.
+      priority: must
+
+    - id: NFR-015
+      description: >
+        New teller staff can perform core transactions (deposit, withdrawal,
+        repayment) after 4 hours of training.
+      priority: should
+
+    - id: NFR-016
+      description: >
+        Contextual help tooltips and an in-app help centre.
+      priority: could
+
+  maintainability:
+    - id: NFR-017
+      description: >
+        Codebase follows documented coding standards with ≥ 80% automated
+        test coverage for core business logic.
+      priority: must
+
+    - id: NFR-018
+      description: >
+        Admin-accessible application logs viewer for troubleshooting.
+      priority: should
+
+    - id: NFR-019
+      description: >
+        All external integrations use versioned APIs to allow independent upgrades.
+      priority: must
+
+    - id: NFR-020
+      description: >
+        Publicly accessible uptime status page for SACCO administrators.
+      priority: should
+
+# ─────────────────────────────────────────────────────────────
+# CONSTRAINTS & COMPLIANCE
+# ─────────────────────────────────────────────────────────────
+
+constraints:
+  regulatory:
+    - Configurable to meet Bank of Uganda SACCO regulatory reporting requirements
+    - Configurable to meet SASRA (Kenya) or equivalent national regulator requirements
+    - Member data handling complies with Uganda Data Protection and Privacy Act 2019
+    - AML controls: large transaction flagging and suspicious activity reporting
+
+  technology:
+    browser_support: [Chrome 90+, Firefox 88+, Edge 90+, Safari 14+]
+    mobile_support: [Android 8.0+ API 26+, iOS 14+]
+    containerisation: Docker / Kubernetes required
+    api_design: RESTful with OpenAPI 3.0 documentation
+    encoding: UTF-8 throughout
+
+  business:
+    - Pricing model supports pay-per-active-member for multi-tenant SaaS
+    - New SACCO tenant onboarding completable within 5 business days
+    - Data migration tools support import from Excel, CSV, and legacy SACCO systems
+
+# ─────────────────────────────────────────────────────────────
+# USER ROLES
+# ─────────────────────────────────────────────────────────────
+
+user_roles:
+  - role: system_administrator
+    description: Manages tenants, global configuration, and platform health
+    scope: platform-wide
+
+  - role: sacco_administrator
+    description: Configures SACCO-specific products, interest rates, and workflows
+    scope: tenant
+
+  - role: teller
+    description: Handles daily OTC transactions and member-facing operations
+    scope: branch
+
+  - role: loan_officer
+    description: Processes loan applications, conducts appraisals, manages portfolio
+    scope: branch or tenant
+
+  - role: accountant
+    description: Manages ledgers, bank reconciliation, and financial reporting
+    scope: tenant
+
+  - role: auditor
+    description: Read-only access to audit trails and all reports; no modification rights
+    scope: tenant
+
+  - role: member
+    description: Self-service access via mobile app, USSD, or member portal
+    scope: own accounts only
+
+  - role: agent
+    description: Field agent processing member transactions on behalf of the SACCO
+    scope: assigned territory
+
+# ─────────────────────────────────────────────────────────────
+# SUGGESTED PHASES (MoSCoW-based)
+# ─────────────────────────────────────────────────────────────
+
+delivery_phases:
+  phase_1_mvp:
+    description: Core SACCO operations — go-live ready
+    modules:
+      - member_management (must requirements)
+      - savings_and_withdrawals (must requirements)
+      - shares (must requirements)
+      - fixed_deposits (must requirements)
+      - loan_management (must requirements)
+      - income_and_expenses (must requirements)
+      - messaging_centre (must requirements)
+      - reporting_and_analytics (must requirements)
+      - security_and_audit (must requirements)
+      - system_administration (must requirements)
+      - digital_channels.mobile_money_integration (must requirements)
+      - digital_channels.agency_and_teller_banking (must requirements)
+
+  phase_2_growth:
+    description: Digital channels and enhanced capabilities
+    modules:
+      - digital_channels.mobile_app
+      - digital_channels.ussd
+      - digital_channels.digital_wallet
+      - All "should" requirements across all modules
+
+  phase_3_scale:
+    description: Advanced features and ecosystem integrations
+    modules:
+      - All "could" requirements across all modules
+      - white_labelling
+      - multi_currency
+      - advanced_analytics_and_dashboards
+      - erp_integration
