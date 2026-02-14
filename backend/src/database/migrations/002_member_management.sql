@@ -3,37 +3,6 @@
 -- Member registration, onboarding, KYC, and lifecycle management
 -- ============================================================================
 
--- IDENTITY DOCUMENTS
-CREATE TABLE IF NOT EXISTS template.identity_documents (
-    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    
-    member_id uuid NOT NULL REFERENCES template.members(id) ON DELETE CASCADE,
-    
-    document_type varchar(50) CHECK (document_type IN ('national_id', 'passport', 'driver_license', 'voter_id', 'birth_certificate')) NOT NULL,
-    
-    document_number varchar(100) NOT NULL,
-    issue_date date,
-    expiry_date date,
-    
-    -- Storage
-    document_url varchar(500),
-    document_data bytea, -- For embedded storage if needed
-    
-    -- Verification
-    is_verified boolean DEFAULT false,
-    verified_by uuid REFERENCES template.staff(id) ON DELETE SET NULL,
-    verified_at timestamptz,
-    
-    -- Audit
-    created_by uuid,
-    created_at timestamptz DEFAULT now() NOT NULL,
-    updated_at timestamptz DEFAULT now() NOT NULL,
-    deleted_at timestamptz
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS identity_docs_unique ON template.identity_documents(member_id, document_type) WHERE deleted_at IS NULL;
-CREATE INDEX IF NOT EXISTS identity_docs_member_idx ON template.identity_documents(member_id) WHERE deleted_at IS NULL;
-
 -- MEMBERS
 CREATE TABLE IF NOT EXISTS template.members (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -100,6 +69,37 @@ CREATE UNIQUE INDEX IF NOT EXISTS members_email_unique ON template.members(email
 CREATE INDEX IF NOT EXISTS members_name_idx ON template.members(last_name, first_name);
 CREATE INDEX IF NOT EXISTS members_status_idx ON template.members(status) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS members_kyc_status_idx ON template.members(kyc_status) WHERE deleted_at IS NULL;
+
+-- IDENTITY DOCUMENTS
+CREATE TABLE IF NOT EXISTS template.identity_documents (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    
+    member_id uuid NOT NULL REFERENCES template.members(id) ON DELETE CASCADE,
+    
+    document_type varchar(50) CHECK (document_type IN ('national_id', 'passport', 'driver_license', 'voter_id', 'birth_certificate')) NOT NULL,
+    
+    document_number varchar(100) NOT NULL,
+    issue_date date,
+    expiry_date date,
+    
+    -- Storage
+    document_url varchar(500),
+    document_data bytea, -- For embedded storage if needed
+    
+    -- Verification
+    is_verified boolean DEFAULT false,
+    verified_by uuid REFERENCES template.staff(id) ON DELETE SET NULL,
+    verified_at timestamptz,
+    
+    -- Audit
+    created_by uuid,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL,
+    deleted_at timestamptz
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS identity_docs_unique ON template.identity_documents(member_id, document_type) WHERE deleted_at IS NULL;
+CREATE INDEX IF NOT EXISTS identity_docs_member_idx ON template.identity_documents(member_id) WHERE deleted_at IS NULL;
 
 -- MEMBERSHIPS
 -- Tracks member lifecycle events and membership types

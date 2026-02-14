@@ -189,7 +189,7 @@ CREATE TABLE IF NOT EXISTS template.internal_transfers (
     deleted_at timestamptz
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS transfers_number_unique ON table.internal_transfers(transfer_number) WHERE deleted_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS transfers_number_unique ON template.internal_transfers(transfer_number) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS transfers_from_account_idx ON template.internal_transfers(from_account_id) WHERE deleted_at IS NULL;
 CREATE INDEX IF NOT EXISTS transfers_to_account_idx ON template.internal_transfers(to_account_id) WHERE deleted_at IS NULL;
 

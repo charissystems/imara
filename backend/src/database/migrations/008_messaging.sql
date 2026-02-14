@@ -72,7 +72,8 @@ CREATE TABLE IF NOT EXISTS template.messages (
     -- Audit
     created_by uuid REFERENCES template.staff(id) ON DELETE SET NULL,
     created_at timestamptz DEFAULT now() NOT NULL,
-    updated_at timestamptz DEFAULT now() NOT NULL
+    updated_at timestamptz DEFAULT now() NOT NULL,
+    deleted_at timestamptz
 );
 
 CREATE INDEX IF NOT EXISTS messages_member_idx ON template.messages(member_id) WHERE deleted_at IS NULL;

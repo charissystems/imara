@@ -173,7 +173,7 @@ CREATE TABLE IF NOT EXISTS template.permission_audit (
     change_timestamp timestamptz DEFAULT now() NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS permission_audit_staff_idx ON table.permission_audit(staff_id);
+CREATE INDEX IF NOT EXISTS permission_audit_staff_idx ON template.permission_audit(staff_id);
 CREATE INDEX IF NOT EXISTS permission_audit_timestamp_idx ON template.permission_audit(change_timestamp);
 
 -- RECONCILIATION AUDIT
