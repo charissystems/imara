@@ -9,6 +9,8 @@ import superAdminRoutes from './routes/superAdmin'; // Platform Admin
 import tenantAdminRoutes from './routes/admin';      // Tenant Admin
 import { memberRoutes } from './routes/members';
 import { authRoutes } from './routes/auth';
+import { accountRoutes } from './routes/accounts';   // Savings accounts & transactions
+import { loanRoutes } from './routes/loans';         // Loan management
 
 const app = createApp();
 
@@ -60,8 +62,23 @@ app.route('/auth', authRoutes);
 // Connects to 'tenant_sacco_1' schema.
 app.route('/admin', tenantAdminRoutes);
 
-// Other Tenant Routes
+// ============================================================================
+// 5. MEMBER MANAGEMENT
+// ============================================================================
+// Member registration, profiles, KYC
 app.route('/members', memberRoutes);
+
+// ============================================================================
+// 6. SAVINGS & ACCOUNTS
+// ============================================================================
+// Savings accounts, deposits, withdrawals, transfers, interest calculations
+app.route('/accounts', accountRoutes);
+
+// ============================================================================
+// 7. LOAN MANAGEMENT
+// ============================================================================
+// Loan products, applications, approvals, repayments, early settlements
+app.route('/loans', loanRoutes);
 
 // 404 Handler
 app.notFound((c) => c.json({ error: 'Not Found' }, 404));

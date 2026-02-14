@@ -1,7 +1,7 @@
 // src/routes/admin.ts
 import { Hono } from 'hono';
 import { z } from 'zod';
-import { publicDb, pool } from '../config/database';
+import { publicDb, getPool } from '../config/database';
 import { ValidationError, NotFoundError, AppError } from '../middleware/errorHandler';
 import { requireSuperAdmin } from '../middleware/superAdmin';
 import { clearTenantCache } from '../middleware/tenantResolver';
@@ -368,13 +368,14 @@ app.get('/tenants/:id/stats', async (c) => {
     }
 
     // Get member count
-    const memberCountResult = await pool.query(
+    const poolInstance = getPool();
+    const memberCountResult = await poolInstance.query(
         `SELECT COUNT(*) as count FROM ${tenant.schema_name}.members WHERE deleted_at IS NULL`
     );
     const memberCount = parseInt(memberCountResult.rows[0]?.count || '0', 10);
 
     // Get staff count
-    const staffCountResult = await pool.query(
+    const staffCountResult = await poolInstance.query(
         `SELECT COUNT(*) as count FROM ${tenant.schema_name}.staff`
     );
     const staffCount = parseInt(staffCountResult.rows[0]?.count || '0', 10);
