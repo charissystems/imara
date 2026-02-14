@@ -2,8 +2,10 @@ import { serve } from '@hono/node-server';
 import 'dotenv/config';
 import app from './index';
 import { MigrationRunner } from './utils/migrationRunner';
+import { startJobScheduler, stopJobScheduler } from './jobs/scheduler';
 
 const port = Number(process.env.PORT) || 3000;
+const enableScheduler = process.env.ENABLE_JOB_SCHEDULER !== 'false';
 
 async function startServer() {
     try {
@@ -18,6 +20,17 @@ async function startServer() {
         process.exit(1);
     }
 
+    // Start job scheduler if enabled and Redis is available
+    if (enableScheduler) {
+        try {
+            await startJobScheduler();
+            console.log('⏰ Job scheduler started');
+        } catch (error) {
+            console.warn('⚠️  Job scheduler failed to start (Redis may be unavailable):', (error as Error).message);
+            console.warn('   Jobs can be triggered manually via the admin API.');
+        }
+    }
+
     console.log(`🚀 Server starting on http://localhost:${port}`);
 
     serve({
@@ -30,3 +43,16 @@ startServer().catch(error => {
     console.error('Fatal error:', error);
     process.exit(1);
 });
+
+// Graceful shutdown
+for (const signal of ['SIGINT', 'SIGTERM'] as const) {
+    process.on(signal, async () => {
+        console.log(`\n${signal} received. Shutting down gracefully...`);
+        try {
+            await stopJobScheduler();
+        } catch {
+            // Ignore shutdown errors
+        }
+        process.exit(0);
+    });
+}

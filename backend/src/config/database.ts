@@ -208,8 +208,3 @@ export const getTenantDb = (schemaName: string) => dbManager.getTenantDb(schemaN
  * Clear tenant database cache
  */
 export const clearTenantDbCache = (schemaName?: string) => dbManager.clearTenantDbCache(schemaName);
-
-/**
- * Get database manager instance
- */
-export { dbManager };
