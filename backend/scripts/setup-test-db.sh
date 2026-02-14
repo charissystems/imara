@@ -71,6 +71,7 @@ psql -U "$DB_USER" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -d "$DB_NAME" -f "$PU
 psql -U "$DB_USER" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -d "$DB_NAME" -f "$PUBLIC_MIGRATIONS/002_init_tracking.sql"
 psql -U "$DB_USER" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -d "$DB_NAME" -f "$PUBLIC_MIGRATIONS/003_tenant_engine.sql"
 psql -U "$DB_USER" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -d "$DB_NAME" -f "$PUBLIC_MIGRATIONS/000_create_currencies.sql"
+psql -U "$DB_USER" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -d "$DB_NAME" -f "$PUBLIC_MIGRATIONS/004_multitenancy_enhancements.sql"
 
 # ========= 5. Run template migrations (MVP Module-Based) =========
 echo "Running template migrations..."
@@ -84,6 +85,5 @@ psql -U "$DB_USER" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -d "$DB_NAME" -f "$TE
 psql -U "$DB_USER" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -d "$DB_NAME" -f "$TEMPLATE_MIGRATIONS/008_messaging.sql"
 psql -U "$DB_USER" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -d "$DB_NAME" -f "$TEMPLATE_MIGRATIONS/009_audit_and_security.sql"
 psql -U "$DB_USER" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -d "$DB_NAME" -f "$TEMPLATE_MIGRATIONS/010_system_administration.sql"
-psql -U "$DB_USER" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -d "$DB_NAME" -f "$TEMPLATE_MIGRATIONS/011_multitenancy_enhancements.sql"
 
 echo "Test Database Setup Complete"
