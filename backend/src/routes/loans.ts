@@ -5,7 +5,9 @@ import { Env } from '../middleware/types';
 import { validate, getValidatedData, commonSchemas } from '../middleware/validation';
 import { ValidationError, NotFoundError, UnauthorizedError } from '../middleware/errorHandler';
 import { LoanRepository } from '../repositories/loanRepository';
-import { LoanService } from '../services/loanService';
+import { ScheduleCalculator } from '../services/scheduleCalculator';
+import { RepaymentService } from '../services/repaymentService';
+import { getTenantDb } from '../config/database';
 import { hasPermission } from '../middleware/rbac';
 
 export const loanRoutes = new Hono<Env>();
@@ -15,16 +17,25 @@ export const loanRoutes = new Hono<Env>();
 // =============================================================================
 
 const createLoanProductSchema = z.object({
-    product_name: z.string().min(2, 'Product name required'),
-    product_code: z.string().max(20, 'Product code must be at most 20 characters'),
-    interest_rate_type: z.enum(['flat', 'declining_balance', 'reducing_balance']),
-    minimum_rate: z.number().min(0).max(100, 'Rate must be between 0 and 100'),
-    maximum_rate: z.number().min(0).max(100, 'Rate must be between 0 and 100'),
-    default_rate: z.number().min(0).max(100, 'Rate must be between 0 and 100'),
+    code: z.string().max(20, 'Product code must be at most 20 characters'),
+    name: z.string().min(2, 'Product name required'),
+    description: z.string().nullable().optional(),
+    interest_rate_type: z.enum(['fixed', 'variable']),
+    interest_calculation_method: z.enum(['simple', 'compound', 'declining_balance']),
+    default_interest_rate: z.number().min(0).max(100).optional(),
+    fixed_interest_rate: z.number().min(0).max(100).nullable().optional(),
     minimum_amount: z.number().positive('Minimum amount must be positive'),
     maximum_amount: z.number().positive('Maximum amount must be positive'),
-    maximum_duration: z.number().positive('Maximum duration (months) must be positive'),
-    repayment_frequency: z.enum(['weekly', 'biweekly', 'monthly', 'quarterly', 'annual']),
+    minimum_tenure_months: z.number().int().positive().default(1),
+    maximum_tenure_months: z.number().int().positive(),
+    repayment_frequency: z.enum(['weekly', 'bi_weekly', 'monthly', 'quarterly']),
+    late_payment_penalty_type: z.enum(['fixed_amount', 'percentage_of_payment']).default('percentage_of_payment'),
+    late_payment_penalty: z.number().min(0).default(0),
+    requires_collateral: z.boolean().default(false),
+    requires_guarantors: z.boolean().default(false),
+    minimum_guarantors: z.number().int().min(0).default(0),
+    requires_appraisal: z.boolean().default(false),
+    requires_insurance: z.boolean().default(false),
     is_active: z.boolean().default(true),
 });
 
@@ -32,31 +43,36 @@ const createLoanApplicationSchema = z.object({
     member_id: commonSchemas.uuid,
     product_id: commonSchemas.uuid,
     requested_amount: z.number().positive('Requested amount must be positive'),
-    tenure_months: z.number().int().positive('Tenure must be positive'),
-    purpose: z.string().optional(),
-    collateral_description: z.string().optional(),
+    requested_tenure_months: z.number().int().positive('Tenure must be positive'),
+    loan_purpose: z.string().min(1, 'Loan purpose required'),
+    purpose_description: z.string().nullable().optional(),
 });
 
 const approveLoanApplicationSchema = z.object({
     approved_amount: z.number().positive('Approved amount must be positive'),
     approved_interest_rate: z.number().min(0).max(100),
     approved_tenure_months: z.number().int().positive(),
-    approval_notes: z.string().optional(),
 });
 
 const rejectLoanApplicationSchema = z.object({
     rejection_reason: z.string().min(5, 'Rejection reason must be at least 5 characters'),
 });
 
-const recordRepaymentSchema = z.object({
-    loan_id: commonSchemas.uuid,
-    amount_paid: z.number().positive('Amount must be positive'),
-    payment_method: z.enum(['cash', 'bank_transfer', 'mobile_money']),
-    notes: z.string().optional(),
+const processRepaymentSchema = z.object({
+    loan_account_id: commonSchemas.uuid,
+    amount: z.number().positive('Amount must be positive'),
+    payment_method: z.enum(['cash', 'mobile_money', 'bank_transfer', 'cheque', 'internal']),
+    payment_reference: z.string().optional(),
 });
 
-const requestEarlySettlementSchema = z.object({
-    settlement_date: commonSchemas.date.optional(),
+const generateScheduleSchema = z.object({
+    principal: z.number().positive('Principal must be positive'),
+    annual_interest_rate: z.number().min(0).max(100),
+    tenure_installments: z.number().int().positive('Tenure must be a positive integer'),
+    interest_method: z.enum(['flat', 'declining_emi', 'declining_principal']),
+    frequency: z.enum(['weekly', 'bi_weekly', 'monthly', 'quarterly']),
+    start_date: commonSchemas.date,
+    currency_code: z.string().length(3).optional(),
 });
 
 // =============================================================================
@@ -69,7 +85,7 @@ const requestEarlySettlementSchema = z.object({
  */
 loanRoutes.get('/products', async (c) => {
     try {
-        const { schema_name } = c.get('tenant');
+        const { schema_name } = c.get('tenant')!;
         const loanRepo = new LoanRepository(schema_name);
 
         const products = await loanRepo.findAllProducts(true); // true = active only
@@ -91,7 +107,7 @@ loanRoutes.get('/products', async (c) => {
 loanRoutes.get('/products/:productId', async (c) => {
     try {
         const { productId } = c.req.param();
-        const { schema_name } = c.get('tenant');
+        const { schema_name } = c.get('tenant')!;
         const loanRepo = new LoanRepository(schema_name);
 
         const product = await loanRepo.findProductById(productId);
@@ -115,23 +131,15 @@ loanRoutes.get('/products/:productId', async (c) => {
 loanRoutes.post('/products', validate(createLoanProductSchema), async (c) => {
     try {
         const data = getValidatedData<z.infer<typeof createLoanProductSchema>>(c);
-        const { schema_name } = c.get('tenant');
+        const { schema_name } = c.get('tenant')!;
         const user = c.get('user');
 
         // Check permission: only admins can create products
-        if (!user || !hasPermission(user.role, 'loan_products', 'create')) {
+        if (!user || !hasPermission(user.role || '', 'loan_products', 'create')) {
             throw new UnauthorizedError('Insufficient permissions to create loan products');
         }
 
         const loanRepo = new LoanRepository(schema_name);
-
-        // Validate rate ranges
-        if (data.minimum_rate > data.default_rate || data.default_rate > data.maximum_rate) {
-            return c.json({
-                success: false,
-                error: { code: 'INVALID_RATES', message: 'Rate range invalid: min ≤ default ≤ max' }
-            }, 400);
-        }
 
         // Validate amount ranges
         if (data.minimum_amount > data.maximum_amount) {
@@ -141,11 +149,14 @@ loanRoutes.post('/products', validate(createLoanProductSchema), async (c) => {
             }, 400);
         }
 
-        const product = await loanRepo.createProduct({
-            ...data,
-            created_at: new Date(),
-            updated_at: new Date(),
-        } as any);
+        if (data.minimum_tenure_months > data.maximum_tenure_months) {
+            return c.json({
+                success: false,
+                error: { code: 'INVALID_TENURE', message: 'Tenure range invalid: min ≤ max' }
+            }, 400);
+        }
+
+        const product = await loanRepo.createProduct(data as any);
 
         return c.json({
             success: true,
@@ -167,7 +178,7 @@ loanRoutes.post('/products', validate(createLoanProductSchema), async (c) => {
  */
 loanRoutes.get('/applications', async (c) => {
     try {
-        const { schema_name } = c.get('tenant');
+        const { schema_name } = c.get('tenant')!;
         const currentUser = c.get('user');
         const loanRepo = new LoanRepository(schema_name);
 
@@ -197,7 +208,7 @@ loanRoutes.get('/applications', async (c) => {
 loanRoutes.get('/applications/:applicationId', async (c) => {
     try {
         const { applicationId } = c.req.param();
-        const { schema_name } = c.get('tenant');
+        const { schema_name } = c.get('tenant')!;
         const currentUser = c.get('user');
         const loanRepo = new LoanRepository(schema_name);
 
@@ -227,10 +238,9 @@ loanRoutes.get('/applications/:applicationId', async (c) => {
 loanRoutes.post('/applications', validate(createLoanApplicationSchema), async (c) => {
     try {
         const data = getValidatedData<z.infer<typeof createLoanApplicationSchema>>(c);
-        const { schema_name } = c.get('tenant');
+        const { schema_name } = c.get('tenant')!;
         const currentUser = c.get('user');
         const loanRepo = new LoanRepository(schema_name);
-        const loanService = new LoanService();
 
         // Authorization: member applies for themselves, admins apply on behalf
         if (currentUser?.role === 'member' && data.member_id !== currentUser.id) {
@@ -244,21 +254,23 @@ loanRoutes.post('/applications', validate(createLoanApplicationSchema), async (c
         }
 
         // Validate requested amount
-        if (data.requested_amount < product.minimum_amount || data.requested_amount > product.maximum_amount) {
+        const minAmount = Number(product.minimum_amount);
+        const maxAmount = Number(product.maximum_amount);
+        if (data.requested_amount < minAmount || data.requested_amount > maxAmount) {
             return c.json({
                 success: false,
                 error: {
                     code: 'INVALID_AMOUNT',
-                    message: `Amount must be between ${product.minimum_amount} and ${product.maximum_amount}`
+                    message: `Amount must be between ${minAmount} and ${maxAmount}`
                 }
             }, 400);
         }
 
         const application = await loanRepo.createApplication({
             ...data,
-            status: 'pending',
-            created_at: new Date(),
-            updated_at: new Date(),
+            application_number: `LA-${Date.now()}`,
+            application_date: new Date(),
+            status: 'draft',
         } as any);
 
         return c.json({
@@ -279,10 +291,10 @@ loanRoutes.patch('/applications/:applicationId/approve', validate(approveLoanApp
     try {
         const { applicationId } = c.req.param();
         const data = getValidatedData<z.infer<typeof approveLoanApplicationSchema>>(c);
-        const { schema_name } = c.get('tenant');
+        const { schema_name } = c.get('tenant')!;
         const user = c.get('user');
 
-        if (!user || !hasPermission(user.role, 'loan_applications', 'approve')) {
+        if (!user || !hasPermission(user.role || '', 'loan_applications', 'approve')) {
             throw new UnauthorizedError('Insufficient permissions to approve loan applications');
         }
 
@@ -292,23 +304,8 @@ loanRoutes.patch('/applications/:applicationId/approve', validate(approveLoanApp
             throw new NotFoundError('Loan Application', applicationId);
         }
 
-        // Generate repayment schedule
-        const loanService = new LoanService();
-        const schedule = loanService.generateRepaymentSchedule(
-            data.approved_amount,
-            data.approved_tenure_months,
-            data.approved_interest_rate,
-            application.interest_rate_type || 'declining_emi'
-        );
-
         const approvedApplication = await loanRepo.approveApplication(applicationId, {
             status: 'approved',
-            approved_amount: data.approved_amount,
-            approved_interest_rate: data.approved_interest_rate,
-            approved_tenure_months: data.approved_tenure_months,
-            approval_date: new Date(),
-            approval_notes: data.approval_notes,
-            repayment_schedule: schedule,
         } as any);
 
         return c.json({
@@ -329,10 +326,10 @@ loanRoutes.patch('/applications/:applicationId/reject', validate(rejectLoanAppli
     try {
         const { applicationId } = c.req.param();
         const data = getValidatedData<z.infer<typeof rejectLoanApplicationSchema>>(c);
-        const { schema_name } = c.get('tenant');
+        const { schema_name } = c.get('tenant')!;
         const user = c.get('user');
 
-        if (!user || !hasPermission(user.role, 'loan_applications', 'approve')) {
+        if (!user || !hasPermission(user.role || '', 'loan_applications', 'approve')) {
             throw new UnauthorizedError('Insufficient permissions to reject loan applications');
         }
 
@@ -345,7 +342,6 @@ loanRoutes.patch('/applications/:applicationId/reject', validate(rejectLoanAppli
         const rejectedApplication = await loanRepo.rejectApplication(applicationId, {
             status: 'rejected',
             rejection_reason: data.rejection_reason,
-            rejection_date: new Date(),
         } as any);
 
         return c.json({
@@ -368,7 +364,7 @@ loanRoutes.patch('/applications/:applicationId/reject', validate(rejectLoanAppli
  */
 loanRoutes.get('/', async (c) => {
     try {
-        const { schema_name } = c.get('tenant');
+        const { schema_name } = c.get('tenant')!;
         const currentUser = c.get('user');
         const loanRepo = new LoanRepository(schema_name);
 
@@ -396,7 +392,7 @@ loanRoutes.get('/', async (c) => {
 loanRoutes.get('/:loanId', async (c) => {
     try {
         const { loanId } = c.req.param();
-        const { schema_name } = c.get('tenant');
+        const { schema_name } = c.get('tenant')!;
         const currentUser = c.get('user');
         const loanRepo = new LoanRepository(schema_name);
 
@@ -421,85 +417,97 @@ loanRoutes.get('/:loanId', async (c) => {
 
 /**
  * POST /loans/repayment
- * Record a loan repayment
+ * Process a loan repayment with Decimal-precision auto-allocation.
+ * Allocates: penalties → interest → principal.
  */
-loanRoutes.post('/repayment', validate(recordRepaymentSchema), async (c) => {
+loanRoutes.post('/repayment', validate(processRepaymentSchema), async (c) => {
     try {
-        const data = getValidatedData<z.infer<typeof recordRepaymentSchema>>(c);
-        const { schema_name } = c.get('tenant');
-        const loanRepo = new LoanRepository(schema_name);
+        const data = getValidatedData<z.infer<typeof processRepaymentSchema>>(c);
+        const { schema_name } = c.get('tenant')!;
+        const user = c.get('user');
 
-        const loan = await loanRepo.findLoanById(data.loan_id);
-        if (!loan) {
-            throw new NotFoundError('Loan', data.loan_id);
+        if (!user) {
+            throw new UnauthorizedError('Authentication required');
         }
 
-        // Validate amount
-        if (data.amount_paid > loan.outstanding_balance) {
-            return c.json({
-                success: false,
-                error: { code: 'OVERPAYMENT', message: `Maximum payable is ${loan.outstanding_balance}` }
-            }, 400);
-        }
+        const db = getTenantDb(schema_name);
+        const repaymentService = new RepaymentService(db);
 
-        // Record repayment
-        const repayment = await loanRepo.recordRepayment({
-            loan_id: data.loan_id,
-            amount_paid: data.amount_paid,
-            payment_method: data.payment_method,
-            payment_date: new Date(),
-            notes: data.notes,
-        } as any);
+        const result = await repaymentService.processRepayment({
+            loanAccountId: data.loan_account_id,
+            amount: data.amount,
+            paymentMethod: data.payment_method,
+            paymentReference: data.payment_reference,
+            recordedBy: user.id,
+        });
 
         return c.json({
             success: true,
-            data: repayment,
-            meta: { created: true }
+            data: {
+                repaymentId: result.repaymentId,
+                loanAccountId: result.loanAccountId,
+                totalPaid: result.totalPaid.toString(),
+                allocatedPenalty: result.allocatedPenalty.toString(),
+                allocatedInterest: result.allocatedInterest.toString(),
+                allocatedPrincipal: result.allocatedPrincipal.toString(),
+                overpayment: result.overpayment.toString(),
+                installmentsFullyPaid: result.installmentsFullyPaid,
+                installmentsPartiallyPaid: result.installmentsPartiallyPaid,
+                remainingBalance: result.remainingBalance.toString(),
+                loanFullyRepaid: result.loanFullyRepaid,
+            },
+            meta: { created: true },
         }, 201);
     } catch (error) {
         throw error;
     }
 });
 
+// =============================================================================
+// SCHEDULE PREVIEW (LON-020)
+// =============================================================================
+
 /**
- * PATCH /loans/:loanId/early-settlement
- * Request early settlement of a loan
+ * POST /loans/schedule/preview
+ * Generate a loan repayment schedule preview without persisting anything.
+ * Uses the Decimal.js-powered ScheduleCalculator.
  */
-loanRoutes.patch('/:loanId/early-settlement', validate(requestEarlySettlementSchema), async (c) => {
+loanRoutes.post('/schedule/preview', validate(generateScheduleSchema), async (c) => {
     try {
-        const { loanId } = c.req.param();
-        const data = getValidatedData<z.infer<typeof requestEarlySettlementSchema>>(c);
-        const { schema_name } = c.get('tenant');
-        const currentUser = c.get('user');
-        const loanRepo = new LoanRepository(schema_name);
+        const data = getValidatedData<z.infer<typeof generateScheduleSchema>>(c);
 
-        const loan = await loanRepo.findLoanById(loanId);
-        if (!loan) {
-            throw new NotFoundError('Loan', loanId);
-        }
+        const schedule = ScheduleCalculator.generateSchedule({
+            principal: data.principal,
+            annualInterestRate: data.annual_interest_rate,
+            tenureInstallments: data.tenure_installments,
+            interestMethod: data.interest_method,
+            frequency: data.frequency,
+            startDate: new Date(data.start_date),
+            currencyCode: data.currency_code,
+        });
 
-        // Authorization
-        if (currentUser?.role === 'member' && loan.member_id !== currentUser.id) {
-            throw new UnauthorizedError('Cannot request early settlement for other members\' loans');
-        }
-
-        const loanService = new LoanService();
-        const earlySettlementAmount = loanService.computeEarlySettlementRebate(
-            loan.outstanding_balance,
-            loan.remaining_term_months,
-            loan.interest_rate
-        );
-
-        const updatedLoan = await loanRepo.updateLoan(loanId, {
-            status: 'early_settlement_pending',
-            settlement_request_date: new Date(),
-            settlement_amount: earlySettlementAmount,
-        } as any);
-
+        // Serialize Decimal values for JSON response
         return c.json({
             success: true,
-            data: updatedLoan,
-            meta: { settlementAmount: earlySettlementAmount }
+            data: {
+                principal: schedule.principal.toString(),
+                annualInterestRate: schedule.annualInterestRate.toString(),
+                interestMethod: schedule.interestMethod,
+                frequency: schedule.frequency,
+                tenureInstallments: schedule.tenureInstallments,
+                totalInterest: schedule.totalInterest.toString(),
+                totalPayment: schedule.totalPayment.toString(),
+                currencyCode: schedule.currencyCode,
+                installments: schedule.installments.map(inst => ({
+                    installmentNumber: inst.installmentNumber,
+                    dueDate: inst.dueDate.toISOString(),
+                    openingBalance: inst.openingBalance.toString(),
+                    principalPayment: inst.principalPayment.toString(),
+                    interestPayment: inst.interestPayment.toString(),
+                    totalPayment: inst.totalPayment.toString(),
+                    closingBalance: inst.closingBalance.toString(),
+                })),
+            },
         });
     } catch (error) {
         throw error;

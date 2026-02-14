@@ -27,7 +27,7 @@ const updateMemberSchema = createMemberSchema.partial();
  */
 memberRoutes.get('/', async (c) => {
     try {
-        const { schema_name } = c.get('tenant');
+        const { schema_name } = c.get('tenant')!;
         const status = c.req.query('status') as string | undefined;
         
         const memberRepo = new MemberRepository(schema_name);
@@ -38,7 +38,7 @@ memberRoutes.get('/', async (c) => {
             data: members,
             meta: {
                 count: members.length,
-                tenant: c.get('tenant').code
+                tenant: c.get('tenant')!.code
             }
         });
     } catch (error) {
@@ -53,7 +53,7 @@ memberRoutes.get('/', async (c) => {
 memberRoutes.get('/:id', async (c) => {
     try {
         const { id } = c.req.param();
-        const { schema_name } = c.get('tenant');
+        const { schema_name } = c.get('tenant')!;
         
         const memberRepo = new MemberRepository(schema_name);
         const member = await memberRepo.findById(id);
@@ -78,7 +78,7 @@ memberRoutes.get('/:id', async (c) => {
 memberRoutes.post('/', validate(createMemberSchema), async (c) => {
     try {
         const data = getValidatedData<z.infer<typeof createMemberSchema>>(c);
-        const { schema_name } = c.get('tenant');
+        const { schema_name } = c.get('tenant')!;
         
         const memberRepo = new MemberRepository(schema_name);
         
@@ -114,7 +114,7 @@ memberRoutes.put('/:id', validate(updateMemberSchema), async (c) => {
     try {
         const { id } = c.req.param();
         const data = getValidatedData<z.infer<typeof updateMemberSchema>>(c);
-        const { schema_name } = c.get('tenant');
+        const { schema_name } = c.get('tenant')!;
         
         const memberRepo = new MemberRepository(schema_name);
         
@@ -143,7 +143,7 @@ memberRoutes.put('/:id', validate(updateMemberSchema), async (c) => {
 memberRoutes.delete('/:id', async (c) => {
     try {
         const { id } = c.req.param();
-        const { schema_name } = c.get('tenant');
+        const { schema_name } = c.get('tenant')!;
         
         const memberRepo = new MemberRepository(schema_name);
         

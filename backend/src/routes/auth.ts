@@ -11,6 +11,7 @@ import {
 import { StaffRepository } from '../repositories/staffRepository';
 import { AuthRepository } from '../repositories/authRepository';
 import { AuthService } from '../services/authService';
+import { appLogger } from '../middleware/logger';
 
 export const authRoutes = new Hono<Env>();
 
@@ -26,9 +27,9 @@ const passwordSchema = z.string()
 const registerSchema = z.object({
     first_name: z.string().min(2, 'First name required'),
     last_name: z.string().min(2, 'Last name required'),
-    work_email: z.string().email('Invalid email format'),
+    email: z.string().email('Invalid email format'),
     password: passwordSchema,
-    work_phone: z.string().optional(),
+    phone: z.string().optional(),
 });
 
 const loginSchema = z.object({
@@ -71,7 +72,7 @@ const forgotPasswordSchema = z.object({
 authRoutes.post('/login', validate(loginSchema), async (c) => {
     try {
         const data = getValidatedData<z.infer<typeof loginSchema>>(c);
-        const { schema_name, code: tenantCode } = c.get('tenant');
+        const { schema_name, code: tenantCode } = c.get('tenant')!;
 
         const staffRepo = new StaffRepository(schema_name);
         const authRepo = new AuthRepository(schema_name);
@@ -89,14 +90,13 @@ authRoutes.post('/login', validate(loginSchema), async (c) => {
             throw new UnauthorizedError('Account not properly configured');
         }
 
-        // Check if account is active
-        if (!credentials.is_active) {
-            throw new UnauthorizedError('Account is inactive');
-        }
-
         // Check if account is locked
-        if (authService.isAccountLocked(credentials)) {
-            throw new UnauthorizedError('Account is locked. Try again later');
+        if (credentials.account_locked) {
+            if (credentials.locked_until && new Date(credentials.locked_until) > new Date()) {
+                throw new UnauthorizedError('Account is locked. Try again later');
+            }
+            // Lock expired, unlock
+            await authRepo.unlockAccount(staff.id);
         }
 
         // Verify password
@@ -121,7 +121,7 @@ authRoutes.post('/login', validate(loginSchema), async (c) => {
         // Reset failed attempts on successful login
         await authRepo.update(staff.id, {
             failed_login_attempts: 0,
-            is_locked: false,
+            account_locked: false,
             locked_until: null,
         });
 
@@ -140,9 +140,9 @@ authRoutes.post('/login', validate(loginSchema), async (c) => {
                 staff: {
                     id: staff.id,
                     staffNumber: staff.staff_number,
-                    email: staff.work_email,
+                    email: staff.email,
                     department: staff.department,
-                    jobTitle: staff.job_title,
+                    position: staff.position,
                 },
             },
             meta: {
@@ -162,14 +162,14 @@ authRoutes.post('/login', validate(loginSchema), async (c) => {
 authRoutes.post('/register', validate(registerSchema), async (c) => {
     try {
         const data = getValidatedData<z.infer<typeof registerSchema>>(c);
-        const { schema_name, code: tenantCode } = c.get('tenant');
+        const { schema_name, code: tenantCode } = c.get('tenant')!;
 
         const staffRepo = new StaffRepository(schema_name);
         const authRepo = new AuthRepository(schema_name);
         const authService = new AuthService();
 
         // Check if email already exists
-        const existingStaff = await staffRepo.findByEmail(data.work_email);
+        const existingStaff = await staffRepo.findByEmail(data.email);
         if (existingStaff) {
             return c.json({
                 success: false,
@@ -180,26 +180,36 @@ authRoutes.post('/register', validate(registerSchema), async (c) => {
             }, 409);
         }
 
-        // Hash password
+        // Create staff record first
+        const newStaff = await staffRepo.create({
+            first_name: data.first_name,
+            last_name: data.last_name,
+            email: data.email,
+            phone: data.phone,
+            staff_number: `STF-${Date.now()}`, // TODO: proper staff number generation
+            status: 'active',
+            hire_date: new Date().toISOString().split('T')[0],
+        } as any);
+
+        // Hash password and create credentials
         const passwordHash = await authService.hashPassword(data.password);
 
-        // Create credentials
         const credentials = await authRepo.create({
+            staff_id: newStaff.id,
             password_hash: passwordHash,
             password_changed_at: new Date(),
-            is_active: true,
-            is_locked: false,
             failed_login_attempts: 0,
-            last_password_changed_at: new Date(),
+            account_locked: false,
         } as any);
 
         return c.json({
             success: true,
             data: {
-                credentialsId: credentials.id,
+                staffId: newStaff.id,
+                staffNumber: newStaff.staff_number,
             },
             meta: {
-                message: 'Staff credentials created. Associate with staff record.',
+                message: 'Staff account created successfully.',
                 tenant: tenantCode,
             },
         }, 201);
@@ -220,7 +230,7 @@ authRoutes.get('/me', async (c) => {
             throw new UnauthorizedError('Not authenticated');
         }
 
-        const { schema_name } = c.get('tenant');
+        const { schema_name } = c.get('tenant')!;
 
         const staffRepo = new StaffRepository(schema_name);
         const authRepo = new AuthRepository(schema_name);
@@ -239,13 +249,12 @@ authRoutes.get('/me', async (c) => {
             data: {
                 id: staff.id,
                 staffNumber: staff.staff_number,
-                email: staff.work_email,
-                phone: staff.work_phone,
+                email: staff.email,
+                phone: staff.phone,
                 department: staff.department,
-                jobTitle: staff.job_title,
-                employmentStatus: staff.employment_status,
+                position: staff.position,
+                status: staff.status,
                 hireDate: staff.hire_date,
-                isActive: credentials?.is_active,
                 lastLogin: credentials?.last_login_at,
             },
         });
@@ -274,7 +283,7 @@ authRoutes.post('/refresh', async (c) => {
             throw new UnauthorizedError('Invalid or expired refresh token');
         }
 
-        const { schema_name } = c.get('tenant');
+        const { schema_name } = c.get('tenant')!;
         const staffRepo = new StaffRepository(schema_name);
 
         // Get staff details
@@ -342,7 +351,7 @@ authRoutes.post(
                 throw new UnauthorizedError('Not authenticated');
             }
 
-            const { schema_name } = c.get('tenant');
+            const { schema_name } = c.get('tenant')!;
             const authRepo = new AuthRepository(schema_name);
             const authService = new AuthService();
 
@@ -366,12 +375,7 @@ authRoutes.post(
             const newHash = await authService.hashPassword(data.newPassword);
 
             // Update password
-            const expirationDate = authService.getPasswordExpirationDate();
-            await authRepo.updatePassword(
-                currentUser.id,
-                newHash,
-                expirationDate
-            );
+            await authRepo.updatePassword(currentUser.id, newHash);
 
             return c.json({
                 success: true,
@@ -387,47 +391,31 @@ authRoutes.post(
 
 /**
  * POST /auth/forgot-password
- * Request a password reset token
+ * Request a password reset link
+ * TODO: Requires a password_reset_tokens table or Redis-based token store.
+ *       The staff_credentials table does not have reset_token columns.
+ *       For now, this endpoint validates the email and returns a stub response.
  */
 authRoutes.post('/forgot-password', validate(forgotPasswordSchema), async (c) => {
     try {
         const data = getValidatedData<z.infer<typeof forgotPasswordSchema>>(c);
-        const { schema_name } = c.get('tenant');
+        const { schema_name } = c.get('tenant')!;
 
         const staffRepo = new StaffRepository(schema_name);
-        const authRepo = new AuthRepository(schema_name);
 
-        // Find staff by email
+        // Find staff by email (don't reveal whether email exists)
         const staff = await staffRepo.findByEmail(data.email);
-        if (!staff) {
-            // Don't reveal whether email exists
-            return c.json({
-                success: true,
-                meta: {
-                    message: 'If email exists, reset link has been sent',
-                },
-            });
+
+        if (staff) {
+            // TODO: Generate token, store in separate table/Redis, send via email
+            appLogger.info('Password reset requested', { staffId: staff.id });
         }
 
-        // Generate reset token
-        const authService = new AuthService();
-        const resetToken = authService.generateResetToken();
-        const expiresAt = new Date();
-        expiresAt.setHours(expiresAt.getHours() + 1);
-
-        // Save reset token
-        await authRepo.setPasswordReset(staff.id, resetToken, expiresAt);
-
-        // Here you would send an email with the reset token
-        // For now, return it in response (development only)
-
+        // Always return same response to prevent email enumeration
         return c.json({
             success: true,
-            data: {
-                resetToken, // Remove in production - send via email instead
-            },
             meta: {
-                message: 'Password reset token generated. Send to email in production.',
+                message: 'If the email is registered, a reset link has been sent.',
             },
         });
     } catch (error) {
@@ -438,44 +426,16 @@ authRoutes.post('/forgot-password', validate(forgotPasswordSchema), async (c) =>
 /**
  * POST /auth/reset-password
  * Reset password using reset token
+ * TODO: Implement once password_reset_tokens table is added.
  */
 authRoutes.post('/reset-password', validate(resetPasswordSchema), async (c) => {
-    try {
-        const data = getValidatedData<z.infer<typeof resetPasswordSchema>>(c);
-        const { schema_name } = c.get('tenant');
-
-        const authRepo = new AuthRepository(schema_name);
-        const authService = new AuthService();
-
-        // Find credentials by reset token
-        const credentials = await authRepo.findByResetToken(data.token);
-        if (!credentials) {
-            throw new UnauthorizedError('Invalid or expired reset token');
-        }
-
-        // Check if token has expired
-        if (authService.isResetTokenExpired(credentials.reset_token_expires_at)) {
-            throw new UnauthorizedError('Reset token has expired');
-        }
-
-        // Hash new password
-        const passwordHash = await authService.hashPassword(data.newPassword);
-
-        // Update password and clear reset token
-        const expirationDate = authService.getPasswordExpirationDate();
-        await authRepo.updatePassword(
-            credentials.staff_id,
-            passwordHash,
-            expirationDate
-        );
-
-        return c.json({
-            success: true,
-            meta: {
-                message: 'Password reset successfully. Please log in.',
-            },
-        });
-    } catch (error) {
-        throw error;
-    }
+    // TODO: Look up token in password_reset_tokens table, validate expiry,
+    //       hash new password, call authRepo.updatePassword(), delete token.
+    return c.json({
+        success: false,
+        error: {
+            code: 'NOT_IMPLEMENTED',
+            message: 'Password reset is not yet available. Contact an administrator.',
+        },
+    }, 501);
 });
