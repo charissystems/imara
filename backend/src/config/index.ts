@@ -1,36 +1,59 @@
-import { Hono } from 'hono';
-import { createApp } from './middleware/types';
-import { logger, tenantResolver, schemaContext, errorHandler } from './middleware';
-import { dbManager } from './config/database';
-import { adminRoutes } from './routes/admin';
-import { memberRoutes } from './routes/members';
+/**
+ * Configuration layer for the SACCO backend
+ * Exports database manager, multitenancy config, and app initialization utilities
+ */
 
-// Create the app with our Types
-const app = createApp();
+export { dbManager, publicDb, getTenantDb, clearTenantDbCache, getPool } from './database';
+export * from './multitenancy';
 
-// 1. Global Error Handler (Must be first)
-app.onError(errorHandler);
+/**
+ * Application initialization context
+ * Validates all required environment variables and initializes managers
+ */
+export async function initializeApp() {
+    const missingEnvs: string[] = [];
 
-// 2. Global Logger
-app.use('*', logger);
+    const requiredEnvs = [
+        'DB_HOST',
+        'DB_PORT',
+        'DB_USER',
+        'DB_PASSWORD',
+        'DB_NAME',
+        'JWT_SECRET',
+        'REFRESH_TOKEN_SECRET',
+    ];
 
-// 3. PUBLIC ROUTES (No Tenant Required)
-// These run BEFORE tenantResolver
-app.get('/health', async (c) => {
-    const isHealthy = await dbManager.healthCheck();
-    return c.json({ status: isHealthy ? 'ok' : 'unhealthy' });
-});
+    for (const env of requiredEnvs) {
+        if (!process.env[env]) {
+            missingEnvs.push(env);
+        }
+    }
 
-// 4. TENANT STACK (Tenant Required)
-// All routes defined after these middlewares require a valid tenant.
-app.use('*', tenantResolver);
-app.use('*', schemaContext);
+    if (missingEnvs.length > 0) {
+        throw new Error(`Missing required environment variables: ${missingEnvs.join(', ')}`);
+    }
 
-// 5. Routes
-app.route('/admin', adminRoutes);
-app.route('/members', memberRoutes);
+    console.log('✅ [CONFIG] All required environment variables present');
 
-// Fallback
-app.notFound((c) => c.json({ error: 'Not Found' }, 404));
+    // Validate JWT secrets have minimum length
+    if ((process.env.JWT_SECRET || '').length < 32) {
+        console.warn('⚠️  JWT_SECRET is less than 32 characters; should be longer for security');
+    }
 
-export default app;
+    if ((process.env.REFRESH_TOKEN_SECRET || '').length < 32) {
+        console.warn('⚠️  REFRESH_TOKEN_SECRET is less than 32 characters; should be longer for security');
+    }
+
+    return {
+        environment: process.env.NODE_ENV || 'development',
+        port: parseInt(process.env.PORT || '3000', 10),
+        jwtSecret: process.env.JWT_SECRET!,
+        refreshTokenSecret: process.env.REFRESH_TOKEN_SECRET!,
+    };
+}
+
+/**
+ * Get multitenancy configuration
+ * Call this to access subscription tiers, validate tenant configs, etc.
+ */
+export { MultitenancyConfig, TenantTier, TenantStatus, type MultitenancyConfigAPI } from './multitenancy';

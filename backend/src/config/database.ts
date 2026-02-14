@@ -31,6 +31,7 @@ function calculatePoolSize(): number {
 export class DatabaseManager {
     private pool: Pool;
     public publicDb: Kysely<Database>;
+    private tenantDbCache: Map<string, Kysely<TenantDatabase>> = new Map();
 
     constructor(config: {
         host: string;
@@ -89,11 +90,39 @@ export class DatabaseManager {
         _pool = this.pool;
     }
 
+    /**
+     * Get tenant database with caching
+     * Reuses connections for the same schema
+     */
     getTenantDb(schemaName: string): Kysely<TenantDatabase> {
+        // Check cache first
+        if (this.tenantDbCache.has(schemaName)) {
+            return this.tenantDbCache.get(schemaName)!;
+        }
+
+        // Create new db instance for this schema
         const dialect = new PostgresDialect({ pool: this.pool });
-        return new Kysely<TenantDatabase>({ dialect }).withSchema(schemaName);
+        const db = new Kysely<TenantDatabase>({ dialect }).withSchema(schemaName);
+        
+        // Cache it
+        this.tenantDbCache.set(schemaName, db);
+        return db;
     }
 
+    /**
+     * Clear tenant database cache
+     */
+    clearTenantDbCache(schemaName?: string): void {
+        if (schemaName) {
+            this.tenantDbCache.delete(schemaName);
+        } else {
+            this.tenantDbCache.clear();
+        }
+    }
+
+    /**
+     * Execute raw SQL query
+     */
     async executeRaw<T = any>(
         schemaName: string | 'public',
         queryText: string,
@@ -101,9 +130,11 @@ export class DatabaseManager {
     ): Promise<QueryResult<T>> {
         const client = await this.pool.connect();
         try {
-            await client.query('SET search_path TO $1, public', [schemaName]);
+            if (schemaName !== 'public') {
+                await client.query('SET search_path TO $1, public', [schemaName]);
+            }
             const result = await client.query(queryText, parameters);
-            console.log(`📄 [RAW SQL RESULT]: ${result.rowCount} rows affected`);
+            console.log(`📄 [RAW SQL]: ${result.rowCount} rows affected`);
             return result;
         } finally {
             client.release();
@@ -119,6 +150,7 @@ export class DatabaseManager {
             idleConnections: this.pool.idleCount,
             activeConnections: this.pool.totalCount - this.pool.idleCount,
             waitingRequests: this.pool.waitingCount || 0,
+            cachedTenantDbs: this.tenantDbCache.size,
         };
     }
 
@@ -135,10 +167,16 @@ export class DatabaseManager {
         }
     }
 
+    /**
+     * Close all connections
+     */
     async disconnect(): Promise<void> {
-        if (_pool) {
-            await _pool.end();
-            _pool = null;
+        // Clear cache
+        this.tenantDbCache.clear();
+        
+        // Close pool
+        if (this.pool) {
+            await this.pool.end();
             console.log('🔌 [DB POOL]: Disconnected');
         }
     }
@@ -154,12 +192,24 @@ export const dbManager = new DatabaseManager({
 
 export const publicDb = dbManager.publicDb;
 
-// Get raw pool for direct SQL execution (e.g., migrations, functions)
+/**
+ * Get raw pool for direct SQL execution (e.g., migrations, functions)
+ */
 export function getPool() {
-    return dbManager['pool'];
+    return (dbManager as any).pool;
 }
 
-// Shorthand for common usage
-export const pool = getPool();
-
+/**
+ * Get tenant database connection
+ */
 export const getTenantDb = (schemaName: string) => dbManager.getTenantDb(schemaName);
+
+/**
+ * Clear tenant database cache
+ */
+export const clearTenantDbCache = (schemaName?: string) => dbManager.clearTenantDbCache(schemaName);
+
+/**
+ * Get database manager instance
+ */
+export { dbManager };
