@@ -39,6 +39,41 @@ export type {
     LoanRepayment,
 } from './loanService';
 
+// Schedule Calculator
+export { ScheduleCalculator } from './scheduleCalculator';
+export type {
+    ScheduleInput,
+    ScheduleInstallment,
+    RepaymentSchedule,
+    RepaymentAllocationInput,
+    RepaymentAllocationResult,
+} from './scheduleCalculator';
+
+// Interest Accrual Service
+export { InterestCalculator, InterestAccrualEngine } from './interestAccrualService';
+export type {
+    DailyAccrualResult,
+    AccrualBatchResult,
+    PostingBatchResult,
+    InterestCalcMethod,
+    CalculationBasis,
+    PostingFrequency,
+} from './interestAccrualService';
+
+// Repayment Service
+export { RepaymentService } from './repaymentService';
+export type {
+    ProcessRepaymentInput,
+    ProcessRepaymentResult,
+    PenaltyBatchResult,
+    NplBatchResult,
+    ReminderRecord,
+} from './repaymentService';
+
+// Job Scheduler
+export { getJobScheduler, startJobScheduler, stopJobScheduler } from '../jobs/scheduler';
+export type { JobType, JobData } from '../jobs/scheduler';
+
 // Accounting Service
 export { AccountingService, initAccountingService } from './accountingService';
 export type {
