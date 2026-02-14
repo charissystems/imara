@@ -84,5 +84,6 @@ psql -U "$DB_USER" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -d "$DB_NAME" -f "$TE
 psql -U "$DB_USER" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -d "$DB_NAME" -f "$TEMPLATE_MIGRATIONS/008_messaging.sql"
 psql -U "$DB_USER" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -d "$DB_NAME" -f "$TEMPLATE_MIGRATIONS/009_audit_and_security.sql"
 psql -U "$DB_USER" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -d "$DB_NAME" -f "$TEMPLATE_MIGRATIONS/010_system_administration.sql"
+psql -U "$DB_USER" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -d "$DB_NAME" -f "$TEMPLATE_MIGRATIONS/011_multitenancy_enhancements.sql"
 
 echo "Test Database Setup Complete"

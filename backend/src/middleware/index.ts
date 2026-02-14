@@ -17,6 +17,22 @@ export { authMiddleware, requireAuth } from './auth';
 export { auditMiddleware, AuditLogger } from './audit';
 export type { AuditLog } from './audit';
 
+// Tenant Isolation & Security Middleware
+export { 
+    tenantIsolationCheck, 
+    crossTenantAccessCheck, 
+    requireTenantFilter 
+} from './tenantIsolation';
+
+export { 
+    validateSubscription, 
+    validateUserLimit, 
+    validateMemberLimit, 
+    validateFeatureAccess,
+    isFeatureAvailable,
+    getAvailableFeatures 
+} from './subscriptionValidation';
+
 // Optional Middleware
 export { corsMiddleware } from './cors';
 export { validate, getValidatedData, commonSchemas } from './validation';

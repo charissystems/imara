@@ -4,6 +4,30 @@ import { Database, TenantDatabase } from '../database/types';
 
 let _pool: Pool | null = null;
 
+/**
+ * Calculate optimal pool size based on environment
+ * Default formula: min(50, floor(activeTenants / 2) + 10)
+ */
+function calculatePoolSize(): number {
+    const envMax = process.env.DB_POOL_MAX
+        ? parseInt(process.env.DB_POOL_MAX, 10)
+        : undefined;
+
+    if (envMax) {
+        return Math.min(100, Math.max(5, envMax));
+    }
+
+    // Dynamic sizing: estimate based on environment
+    const environment = process.env.NODE_ENV || 'development';
+    const baseSize = environment === 'production' ? 30 : 20;
+
+    // Allow override for testing or special scenarios
+    const activeTenants = parseInt(process.env.ACTIVE_TENANTS || '1', 10);
+    const calculatedSize = Math.min(50, Math.floor(activeTenants / 2) + baseSize);
+
+    return calculatedSize;
+}
+
 export class DatabaseManager {
     private pool: Pool;
     public publicDb: Kysely<Database>;
@@ -19,15 +43,21 @@ export class DatabaseManager {
             throw new Error('Missing required database configuration');
         }
 
+        const poolMax = calculatePoolSize();
+        const idleTimeout = parseInt(process.env.DB_IDLE_TIMEOUT_MS || '30000', 10);
+        const connectionTimeout = parseInt(process.env.DB_CONNECTION_TIMEOUT_MS || '2000', 10);
+
         this.pool = new Pool({
             host: config.host,
             port: config.port,
             database: config.database,
             user: config.user,
             password: config.password,
-            max: 20,
-            idleTimeoutMillis: 30000,
-            connectionTimeoutMillis: 2000,
+            max: poolMax,
+            idleTimeoutMillis: idleTimeout,
+            connectionTimeoutMillis: connectionTimeout,
+            // Enable connection statement timeout for safety
+            statement_timeout: parseInt(process.env.DB_STATEMENT_TIMEOUT || '30000', 10),
         });
 
         // LOGGING: Pool Errors (Network issues, idle timeouts)
@@ -41,6 +71,9 @@ export class DatabaseManager {
                 console.log(`ℹ️  [PG NOTICE]: [${msg.code}] ${msg.severity} - ${msg.message}`);
             });
         });
+
+        // Log pool info on connect
+        console.log(`📊 [DB POOL INITIALIZED]: max=${poolMax}, idle=${idleTimeout}ms, connection=${connectionTimeout}ms`);
 
         const kyselyLogger = (event: LogEvent) => {
             if (event.level === 'query') {
@@ -77,14 +110,21 @@ export class DatabaseManager {
         }
     }
 
-    async disconnect(): Promise<void> {
-        if (_pool) {
-            await _pool.end();
-            _pool = null;
-            console.log('🔌 [DB POOL]: Disconnected');
-        }
+    /**
+     * Get connection pool statistics for monitoring
+     */
+    getPoolStats() {
+        return {
+            totalConnections: this.pool.totalCount,
+            idleConnections: this.pool.idleCount,
+            activeConnections: this.pool.totalCount - this.pool.idleCount,
+            waitingRequests: this.pool.waitingCount || 0,
+        };
     }
 
+    /**
+     * Monitor pool health
+     */
     async healthCheck(): Promise<boolean> {
         try {
             await this.pool.query('SELECT 1');
@@ -92,6 +132,14 @@ export class DatabaseManager {
         } catch (e) {
             console.error('❌ [DB HEALTH CHECK] Failed', e);
             return false;
+        }
+    }
+
+    async disconnect(): Promise<void> {
+        if (_pool) {
+            await _pool.end();
+            _pool = null;
+            console.log('🔌 [DB POOL]: Disconnected');
         }
     }
 }
