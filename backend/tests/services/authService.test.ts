@@ -96,7 +96,7 @@ describe('AuthService', () => {
         it('should generate a valid JWT access token', async () => {
             const staff = {
                 id: 'staff-123',
-                work_email: 'staff@example.com',
+                email: 'staff@example.com',
                 staff_number: 'STF001',
             };
 
@@ -110,7 +110,7 @@ describe('AuthService', () => {
         it('should include staff information in token payload', async () => {
             const staff = {
                 id: 'staff-456',
-                work_email: 'john@example.com',
+                email: 'john@example.com',
                 staff_number: 'STF002',
             };
 
@@ -126,7 +126,7 @@ describe('AuthService', () => {
         it('should set correct expiration time', async () => {
             const staff = {
                 id: 'staff-789',
-                work_email: 'test@example.com',
+                email: 'test@example.com',
                 staff_number: 'STF003',
             };
 
@@ -144,7 +144,7 @@ describe('AuthService', () => {
         it('should generate a valid JWT refresh token', async () => {
             const staff = {
                 id: 'staff-999',
-                work_email: 'refresh@example.com',
+                email: 'refresh@example.com',
                 staff_number: 'STF004',
             };
 
@@ -158,7 +158,7 @@ describe('AuthService', () => {
         it('should have longer expiration than access token', async () => {
             const staff = {
                 id: 'staff-888',
-                work_email: 'test@example.com',
+                email: 'test@example.com',
                 staff_number: 'STF005',
             };
 
@@ -177,7 +177,7 @@ describe('AuthService', () => {
         it('should be 7 days of expiration', async () => {
             const staff = {
                 id: 'staff-777',
-                work_email: 'test@example.com',
+                email: 'test@example.com',
                 staff_number: 'STF006',
             };
 
@@ -191,7 +191,7 @@ describe('AuthService', () => {
         it('should include type field for refresh token', async () => {
             const staff = {
                 id: 'staff-666',
-                work_email: 'test@example.com',
+                email: 'test@example.com',
                 staff_number: 'STF007',
             };
 
@@ -206,7 +206,7 @@ describe('AuthService', () => {
         it('should verify and decode valid token', async () => {
             const staff = {
                 id: 'staff-101',
-                work_email: 'verify@example.com',
+                email: 'verify@example.com',
                 staff_number: 'STF008',
             };
 
@@ -227,7 +227,7 @@ describe('AuthService', () => {
         it('should return null for tampered token', async () => {
             const staff = {
                 id: 'staff-202',
-                work_email: 'tamper@example.com',
+                email: 'tamper@example.com',
                 staff_number: 'STF009',
             };
 
@@ -278,7 +278,7 @@ describe('AuthService', () => {
 
         it('should generate alphanumeric tokens', () => {
             const token = authService.generateResetToken();
-            expect(/^[a-z0-9]+$/.test(token)).toBe(true);
+            expect(/^[a-zA-Z0-9]+$/.test(token)).toBe(true);
         });
     });
 
@@ -336,7 +336,7 @@ describe('AuthService', () => {
     describe('isAccountLocked', () => {
         it('should return false when account is not locked', () => {
             const credentials = {
-                is_locked: false,
+                account_locked: false,
                 locked_until: null,
             };
 
@@ -345,7 +345,7 @@ describe('AuthService', () => {
 
         it('should return true when account is locked without expiration', () => {
             const credentials = {
-                is_locked: true,
+                account_locked: true,
                 locked_until: null,
             };
 
@@ -357,7 +357,7 @@ describe('AuthService', () => {
             futureDate.setMinutes(futureDate.getMinutes() + 15);
 
             const credentials = {
-                is_locked: true,
+                account_locked: true,
                 locked_until: futureDate,
             };
 
@@ -369,7 +369,7 @@ describe('AuthService', () => {
             pastDate.setMinutes(pastDate.getMinutes() - 15);
 
             const credentials = {
-                is_locked: true,
+                account_locked: true,
                 locked_until: pastDate,
             };
 
