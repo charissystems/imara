@@ -56,4 +56,4 @@ export async function initializeApp() {
  * Get multitenancy configuration
  * Call this to access subscription tiers, validate tenant configs, etc.
  */
-export { MultitenancyConfig, TenantTier, TenantStatus, type MultitenancyConfigAPI } from './multitenancy';
+export { MultitenancyConfig, type TenantTier, type TenantStatus, type MultitenancyConfigAPI } from './multitenancy';

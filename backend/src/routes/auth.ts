@@ -209,7 +209,7 @@ authRoutes.post('/register', validate(registerSchema), async (c) => {
             first_name: data.first_name,
             last_name: data.last_name,
             email: data.email,
-            phone: data.phone || '+0000000000',
+            phone: data.phone || `+000${Date.now().toString().slice(-8)}`,
             staff_number: `STF-${Date.now()}`,
             status: 'active',
             position: 'Staff',

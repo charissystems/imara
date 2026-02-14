@@ -37,6 +37,13 @@ const exportService = new ExportService();
 const periodSchema = z.object({
     period_start: z.string().refine((s) => !isNaN(Date.parse(s)), 'Invalid start date'),
     period_end: z.string().refine((s) => !isNaN(Date.parse(s)), 'Invalid end date'),
+}).refine((data) => {
+    const start = new Date(data.period_start);
+    const end = new Date(data.period_end);
+    return end >= start;
+}, {
+    message: 'End date must be after or equal to start date',
+    path: ['period_end'],
 });
 
 const dateSchema = z.object({

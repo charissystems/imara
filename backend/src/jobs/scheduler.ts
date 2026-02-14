@@ -63,37 +63,37 @@ interface JobDefinition {
 
 const JOB_DEFINITIONS: Record<JobType, JobDefinition> = {
     interest_accrual: {
-        queueName: 'sacco:interest-accrual',
+        queueName: 'sacco-interest-accrual',
         cronExpression: '0 1 * * *',        // Daily at 01:00 UTC
         description: 'Daily savings interest accrual',
     },
     interest_posting: {
-        queueName: 'sacco:interest-posting',
+        queueName: 'sacco-interest-posting',
         cronExpression: '0 2 1 * *',         // 1st of every month at 02:00 UTC
         description: 'Monthly interest posting to account balances',
     },
     penalty_calculation: {
-        queueName: 'sacco:penalty-calculation',
+        queueName: 'sacco-penalty-calculation',
         cronExpression: '0 3 * * *',         // Daily at 03:00 UTC
         description: 'Daily late payment penalty computation',
     },
     npl_flagging: {
-        queueName: 'sacco:npl-flagging',
+        queueName: 'sacco-npl-flagging',
         cronExpression: '0 4 * * *',         // Daily at 04:00 UTC
         description: 'Daily NPL classification check',
     },
     repayment_reminders: {
-        queueName: 'sacco:repayment-reminders',
+        queueName: 'sacco-repayment-reminders',
         cronExpression: '0 7 * * *',         // Daily at 07:00 UTC (business hours)
         description: 'Send upcoming repayment reminders',
     },
     fd_maturity_check: {
-        queueName: 'sacco:fd-maturity-check',
+        queueName: 'sacco-fd-maturity-check',
         cronExpression: '0 5 * * *',         // Daily at 05:00 UTC
         description: 'FD maturity alerts and auto-rollover',
     },
     fd_interest_accrual: {
-        queueName: 'sacco:fd-interest-accrual',
+        queueName: 'sacco-fd-interest-accrual',
         cronExpression: '30 1 * * *',        // Daily at 01:30 UTC (after savings accrual)
         description: 'Daily fixed deposit interest accrual',
     },
