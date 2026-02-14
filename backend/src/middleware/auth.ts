@@ -58,14 +58,16 @@ export async function authMiddleware(c: Context<Env>, next: Next) {
         }
 
         // Set current user in context with full user info
-        c.set('user', {
+        const userInfo = {
             id: payload.staffId,
             email: payload.staffEmail,
             staffNumber: payload.staffNumber,
             role: payload.role || 'staff',
             staffId: payload.staffId,
             tenant_id: payload.tenantId,
-        });
+        };
+        c.set('user', userInfo);
+        c.set('currentUser', userInfo);
 
         appLogger.debug('JWT token verified', {
             staffId: payload.staffId,

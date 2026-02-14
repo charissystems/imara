@@ -197,7 +197,7 @@ CREATE TABLE IF NOT EXISTS template.loan_accounts (
     disbursement_amount numeric(20, 4),
     
     -- Status
-    status varchar(20) CHECK (status IN ('approved_pending_disbursement', 'active', 'closed', 'defaulted', 'written_off')) DEFAULT 'approved_pending_disbursement' NOT NULL,
+    status varchar(40) CHECK (status IN ('approved_pending_disbursement', 'active', 'closed', 'defaulted', 'written_off')) DEFAULT 'approved_pending_disbursement' NOT NULL,
     
     -- Balances
     principal_outstanding numeric(20, 4),

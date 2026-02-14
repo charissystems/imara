@@ -115,6 +115,146 @@ accountRoutes.get('/', async (c) => {
     }
 });
 
+// =============================================================================
+// SAVINGS PRODUCTS (registered before /:accountId to avoid route collision)
+// =============================================================================
+
+/**
+ * GET /accounts/products
+ * List all savings products
+ */
+accountRoutes.get('/products', async (c) => {
+    try {
+        const db = c.get('db')!;
+        const activeOnly = c.req.query('active') === 'true';
+
+        let query = db
+            .selectFrom('savings_products')
+            .selectAll()
+            .where('deleted_at', 'is', null);
+
+        if (activeOnly) {
+            query = query.where('is_active', '=', true);
+        }
+
+        const products = await query.orderBy('name', 'asc').execute();
+
+        return c.json({
+            success: true,
+            data: products,
+            meta: { count: products.length },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * GET /accounts/products/:productId
+ * Get savings product details
+ */
+accountRoutes.get('/products/:productId', async (c) => {
+    try {
+        const { productId } = c.req.param();
+        const db = c.get('db')!;
+
+        const product = await db
+            .selectFrom('savings_products')
+            .selectAll()
+            .where('id', '=', productId)
+            .where('deleted_at', 'is', null)
+            .executeTakeFirst();
+
+        if (!product) {
+            throw new NotFoundError('SavingsProduct', productId);
+        }
+
+        return c.json({ success: true, data: product });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * POST /accounts/products
+ * Create a new savings product (admin only)
+ */
+accountRoutes.post('/products', validate(createSavingsProductSchema), async (c) => {
+    try {
+        const data = getValidatedData<z.infer<typeof createSavingsProductSchema>>(c);
+        const user = c.get('user');
+        const db = c.get('db')!;
+
+        if (!user || !hasPermission(user.role || '', 'savings_products', 'create')) {
+            throw new UnauthorizedError('Insufficient permissions');
+        }
+
+        const product = await db
+            .insertInto('savings_products')
+            .values({
+                code: data.code,
+                name: data.name,
+                description: data.description || null,
+                interest_rate: String(data.interest_rate) as any,
+                interest_paid_frequency: data.interest_paid_frequency as any,
+                interest_calculation_method: (data.interest_calculation_method || 'simple') as any,
+                minimum_balance: String(data.minimum_balance ?? 0) as any,
+                maximum_balance: data.maximum_balance ? String(data.maximum_balance) as any : null,
+                allows_overdraft: data.allows_overdraft ?? false,
+                overdraft_limit: String(data.overdraft_limit ?? 0) as any,
+                is_active: true,
+                created_by: user.id,
+            } as any)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+
+        return c.json({
+            success: true,
+            data: product,
+            meta: { created: true },
+        }, 201);
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * PATCH /accounts/products/:productId
+ * Update a savings product
+ */
+accountRoutes.patch('/products/:productId', validate(updateSavingsProductSchema), async (c) => {
+    try {
+        const { productId } = c.req.param();
+        const data = getValidatedData<z.infer<typeof updateSavingsProductSchema>>(c);
+        const user = c.get('user');
+        const db = c.get('db')!;
+
+        if (!user || !hasPermission(user.role || '', 'savings_products', 'update')) {
+            throw new UnauthorizedError('Insufficient permissions');
+        }
+
+        const updates: Record<string, any> = { updated_at: new Date() };
+        if (data.name !== undefined) updates.name = data.name;
+        if (data.description !== undefined) updates.description = data.description;
+        if (data.interest_rate !== undefined) updates.interest_rate = String(data.interest_rate);
+        if (data.minimum_balance !== undefined) updates.minimum_balance = String(data.minimum_balance);
+        if (data.maximum_balance !== undefined) updates.maximum_balance = String(data.maximum_balance);
+        if (data.is_active !== undefined) updates.is_active = data.is_active;
+
+        const product = await db
+            .updateTable('savings_products')
+            .set(updates as any)
+            .where('id', '=', productId)
+            .where('deleted_at', 'is', null)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+
+        return c.json({ success: true, data: product });
+    } catch (error) {
+        throw error;
+    }
+});
+
 /**
  * GET /accounts/:accountId
  * Get account details
@@ -675,146 +815,6 @@ accountRoutes.post('/batch-deposit', validate(batchDepositSchema), async (c) => 
                 totalDeposited,
             },
         }, 201);
-    } catch (error) {
-        throw error;
-    }
-});
-
-// =============================================================================
-// SAVINGS PRODUCTS
-// =============================================================================
-
-/**
- * GET /accounts/products
- * List all savings products
- */
-accountRoutes.get('/products', async (c) => {
-    try {
-        const db = c.get('db')!;
-        const activeOnly = c.req.query('active') === 'true';
-
-        let query = db
-            .selectFrom('savings_products')
-            .selectAll()
-            .where('deleted_at', 'is', null);
-
-        if (activeOnly) {
-            query = query.where('is_active', '=', true);
-        }
-
-        const products = await query.orderBy('name', 'asc').execute();
-
-        return c.json({
-            success: true,
-            data: products,
-            meta: { count: products.length },
-        });
-    } catch (error) {
-        throw error;
-    }
-});
-
-/**
- * GET /accounts/products/:productId
- * Get savings product details
- */
-accountRoutes.get('/products/:productId', async (c) => {
-    try {
-        const { productId } = c.req.param();
-        const db = c.get('db')!;
-
-        const product = await db
-            .selectFrom('savings_products')
-            .selectAll()
-            .where('id', '=', productId)
-            .where('deleted_at', 'is', null)
-            .executeTakeFirst();
-
-        if (!product) {
-            throw new NotFoundError('SavingsProduct', productId);
-        }
-
-        return c.json({ success: true, data: product });
-    } catch (error) {
-        throw error;
-    }
-});
-
-/**
- * POST /accounts/products
- * Create a new savings product (admin only)
- */
-accountRoutes.post('/products', validate(createSavingsProductSchema), async (c) => {
-    try {
-        const data = getValidatedData<z.infer<typeof createSavingsProductSchema>>(c);
-        const user = c.get('user');
-        const db = c.get('db')!;
-
-        if (!user || !hasPermission(user.role || '', 'savings_products', 'create')) {
-            throw new UnauthorizedError('Insufficient permissions');
-        }
-
-        const product = await db
-            .insertInto('savings_products')
-            .values({
-                code: data.code,
-                name: data.name,
-                description: data.description || null,
-                interest_rate: String(data.interest_rate) as any,
-                interest_paid_frequency: data.interest_paid_frequency as any,
-                interest_calculation_method: (data.interest_calculation_method || 'simple') as any,
-                minimum_balance: String(data.minimum_balance ?? 0) as any,
-                maximum_balance: data.maximum_balance ? String(data.maximum_balance) as any : null,
-                allows_overdraft: data.allows_overdraft ?? false,
-                overdraft_limit: String(data.overdraft_limit ?? 0) as any,
-                is_active: true,
-                created_by: user.id,
-            } as any)
-            .returningAll()
-            .executeTakeFirstOrThrow();
-
-        return c.json({
-            success: true,
-            data: product,
-            meta: { created: true },
-        }, 201);
-    } catch (error) {
-        throw error;
-    }
-});
-
-/**
- * PATCH /accounts/products/:productId
- * Update a savings product
- */
-accountRoutes.patch('/products/:productId', validate(updateSavingsProductSchema), async (c) => {
-    try {
-        const { productId } = c.req.param();
-        const data = getValidatedData<z.infer<typeof updateSavingsProductSchema>>(c);
-        const user = c.get('user');
-        const db = c.get('db')!;
-
-        if (!user || !hasPermission(user.role || '', 'savings_products', 'update')) {
-            throw new UnauthorizedError('Insufficient permissions');
-        }
-
-        const updates: Record<string, any> = { updated_at: new Date() };
-        if (data.name !== undefined) updates.name = data.name;
-        if (data.description !== undefined) updates.description = data.description;
-        if (data.interest_rate !== undefined) updates.interest_rate = String(data.interest_rate);
-        if (data.minimum_balance !== undefined) updates.minimum_balance = String(data.minimum_balance);
-        if (data.maximum_balance !== undefined) updates.maximum_balance = String(data.maximum_balance);
-        if (data.is_active !== undefined) updates.is_active = data.is_active;
-
-        const product = await db
-            .updateTable('savings_products')
-            .set(updates as any)
-            .where('id', '=', productId)
-            .where('deleted_at', 'is', null)
-            .returningAll()
-            .executeTakeFirstOrThrow();
-
-        return c.json({ success: true, data: product });
     } catch (error) {
         throw error;
     }

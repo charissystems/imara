@@ -209,18 +209,22 @@ authRoutes.post('/register', validate(registerSchema), async (c) => {
             first_name: data.first_name,
             last_name: data.last_name,
             email: data.email,
-            phone: data.phone,
-            staff_number: `STF-${Date.now()}`, // TODO: proper staff number generation
+            phone: data.phone || '+0000000000',
+            staff_number: `STF-${Date.now()}`,
             status: 'active',
+            position: 'Staff',
             hire_date: new Date().toISOString().split('T')[0],
         } as any);
 
         // Hash password and create credentials
         const passwordHash = await authService.hashPassword(data.password);
+        // bcrypt embeds the salt in the hash; store its prefix for the DB constraint
+        const passwordSalt = passwordHash.substring(0, 29);
 
         const credentials = await authRepo.create({
             staff_id: newStaff.id,
             password_hash: passwordHash,
+            password_salt: passwordSalt,
             password_changed_at: new Date(),
             failed_login_attempts: 0,
             account_locked: false,

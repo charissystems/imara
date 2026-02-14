@@ -419,7 +419,7 @@ loanRoutes.patch('/applications/:applicationId/approve', validate(approveLoanApp
         } as any);
 
         // Create loan account with approved details
-        const loanNumber = `LN-${Date.now()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+        const loanNumber = `LN${Date.now().toString(36).toUpperCase()}`;
 
         const product = await loanRepo.findProductById(application.product_id);
 

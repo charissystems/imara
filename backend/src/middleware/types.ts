@@ -37,9 +37,6 @@ export type Variables = {
         deleted_at?: string | null;
     };
     
-    // Alias for backward compatibility
-    currentUser?: Variables['user'];
-    
     // User permissions from RBAC
     userPermissions?: Permission[];
     subscriptionWarning?: {

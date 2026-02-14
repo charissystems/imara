@@ -12,6 +12,8 @@ export default defineConfig({
         testTimeout: 15_000,
         hookTimeout: 15_000,
         pool: 'forks',
+        // Run files sequentially to avoid DB conflicts between integration tests
+        fileParallelism: false,
         // Setup files run before each test file
         setupFiles: ['./tests/setup.ts'],
     },

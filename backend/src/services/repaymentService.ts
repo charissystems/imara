@@ -207,7 +207,7 @@ export class RepaymentService {
             await this.db
                 .updateTable('loan_schedules')
                 .set({
-                    penalty_payment: allocation.allocatedPenalty as any,
+                    penalty_payment: allocation.allocatedPenalty.toString() as any,
                     status: newStatus as any,
                     days_overdue: daysOverdue,
                     paid_date: fullyPaid ? (repaymentDate as any) : undefined,
@@ -228,10 +228,10 @@ export class RepaymentService {
                 loan_account_id: input.loanAccountId,
                 repayment_number: repaymentNumber,
                 repayment_date: repaymentDate as any,
-                principal_payment: totalAllocatedPrincipal as any,
-                interest_payment: totalAllocatedInterest as any,
-                penalty_payment: totalAllocatedPenalty as any,
-                total_payment: paymentAmount.minus(remaining) as any,
+                principal_payment: totalAllocatedPrincipal.toString() as any,
+                interest_payment: totalAllocatedInterest.toString() as any,
+                penalty_payment: totalAllocatedPenalty.toString() as any,
+                total_payment: paymentAmount.minus(remaining).toString() as any,
                 payment_method: input.paymentMethod as any,
                 payment_reference: input.paymentReference ?? null,
                 status: 'posted' as any,
@@ -257,10 +257,10 @@ export class RepaymentService {
         await this.db
             .updateTable('loan_accounts')
             .set({
-                principal_outstanding: Decimal.max(0, newPrincipal) as any,
-                interest_outstanding: Decimal.max(0, newInterest) as any,
-                penalties_outstanding: Decimal.max(0, newPenalties) as any,
-                total_outstanding: Decimal.max(0, newTotal) as any,
+                principal_outstanding: Decimal.max(0, newPrincipal).toString() as any,
+                interest_outstanding: Decimal.max(0, newInterest).toString() as any,
+                penalties_outstanding: Decimal.max(0, newPenalties).toString() as any,
+                total_outstanding: Decimal.max(0, newTotal).toString() as any,
                 status: loanFullyRepaid ? ('closed' as any) : loan.status,
                 updated_at: new Date() as any,
             })
