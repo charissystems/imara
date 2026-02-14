@@ -11,6 +11,7 @@ import { memberRoutes } from './routes/members';
 import { authRoutes } from './routes/auth';
 import { accountRoutes } from './routes/accounts';   // Savings accounts & transactions
 import { loanRoutes } from './routes/loans';         // Loan management
+import { reportRoutes } from './routes/reports';     // Reports & Dashboard
 
 const app = createApp();
 
@@ -79,6 +80,12 @@ app.route('/accounts', accountRoutes);
 // ============================================================================
 // Loan products, applications, approvals, repayments, early settlements
 app.route('/loans', loanRoutes);
+
+// ============================================================================
+// 8. REPORTS & DASHBOARD
+// ============================================================================
+// Financial statements, operational reports, dashboard KPIs, exports
+app.route('/reports', reportRoutes);
 
 // 404 Handler
 app.notFound((c) => c.json({ error: 'Not Found' }, 404));

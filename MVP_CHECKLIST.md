@@ -119,31 +119,31 @@
   - [x] QR code for authenticator setup
   - [x] 2FA login flow (temp token → verify → full access)
 
-### Week 7-8: Reporting
-- [ ] **Financial Reports** (P0)
-  - [ ] Trial Balance
-  - [ ] Balance Sheet
-  - [ ] Income Statement (P&L)
-  - [ ] Cash Flow Statement
+### Week 7-8: Reporting ✅ COMPLETE
+- [x] **Financial Reports** (P0)
+  - [x] Trial Balance
+  - [x] Balance Sheet
+  - [x] Income Statement (P&L)
+  - [x] Cash Flow Statement
   
-- [ ] **Operational Reports** (P1)
-  - [ ] Member listing
-  - [ ] Savings summary
-  - [ ] Loan portfolio
-  - [ ] Arrears ageing
-  - [ ] NPL report
-  - [ ] Daily transactions
+- [x] **Operational Reports** (P1)
+  - [x] Member listing
+  - [x] Savings summary
+  - [x] Loan portfolio
+  - [x] Arrears ageing
+  - [x] NPL report
+  - [x] Daily transactions
   
-- [ ] **Export Functionality** (P1)
-  - [ ] PDF export (jsPDF/pdfkit)
-  - [ ] Excel export (ExcelJS)
-  - [ ] CSV export
+- [x] **Export Functionality** (P1)
+  - [x] PDF export (pdfkit)
+  - [x] Excel export (ExcelJS)
+  - [x] CSV export
   
-- [ ] **Dashboard** (P1)
-  - [ ] Real-time KPIs
-  - [ ] Charts/visualizations
-  - [ ] Recent activity
-  - [x] Alerts/notifications (NotificationService convenience methods)
+- [x] **Dashboard** (P1)
+  - [x] Real-time KPIs (PAR 30/90, NPL, arrears, member/savings/loan stats)
+  - [x] Charts/visualizations (data structured for frontend charting)
+  - [x] Recent activity (transactions + activity log feed)
+  - [x] Alerts/notifications (PAR threshold, NPL, arrears alerts)
 
 ---
 
@@ -214,7 +214,7 @@
 - [x] Transaction recording
 - [ ] Auto-posting triggers
 - [ ] Manual journal entries
-- [ ] **Financial statements** ⚠️
+- [x] **Financial statements** ✅ (Trial Balance, Balance Sheet, Income Statement, Cash Flow)
 - [ ] Year-end closing
 - [ ] Budget tracking (Phase 2)
 - [ ] Bank reconciliation (Phase 2)
@@ -252,7 +252,7 @@
 - [x] Loan schedule calculator (flat, EMI, declining — 25 tests)
 - [x] Interest accrual calculation (daily, compound, 365/360 — 12 tests)
 - [x] Repayment allocation (partial, overpay, penalty — 13 tests)
-- [x] Auth service (tokens, lockout, password — 434 total tests passing)
+- [x] Auth service (tokens, lockout, password — 477 total tests passing)
 - [x] Email service tests (7 tests)
 - [x] Notification service tests (17 tests)
 - [x] Password reset service tests (8 tests)
@@ -260,6 +260,8 @@
 - [x] Two-factor auth service tests (23 tests — TOTP, backup codes, verification flow)
 - [x] Permission checks
 - [x] Validation logic (middleware tests)
+- [x] Reporting service tests (24 tests — financial statements, operational reports, dashboard KPIs, alert thresholds)
+- [x] Export service tests (19 tests — PDF generation, Excel export, CSV formatting)
 - [ ] Date calculations
 - [ ] Currency calculations
 
@@ -522,17 +524,18 @@ pm2 logs
 - [ ] NPL job
 - [ ] 2FA
 
-### Sprint 4 (Week 7-8)
+### Sprint 4 (Week 7-8) ✅ COMPLETE
 **Goal:** Reporting complete
-- [ ] Financial reports
-- [ ] Export functionality
-- [ ] Dashboard
+- [x] Financial reports (Trial Balance, Balance Sheet, Income Statement, Cash Flow)
+- [x] Operational reports (Members, Savings, Loans, Arrears, NPL, Daily Txn)
+- [x] Export functionality (PDF via pdfkit, Excel via ExcelJS, CSV)
+- [x] Dashboard (KPIs, recent activity, PAR/NPL/arrears alerts)
 
 ---
 
 **Last Updated:** February 14, 2026  
-**Sprint:** Sprint 2 IN PROGRESS (Email/Notifications done, MoMo/SMS deferred)  
-**MVP Launch Target:** ~5 weeks remaining
+**Sprint:** Sprint 4 COMPLETE (Reporting & Dashboard done)  
+**MVP Launch Target:** External integrations (MoMo/SMS) remaining
 
 ### Key Files Added/Modified (Sprint 1)
 | File | Lines | Purpose |
@@ -564,3 +567,15 @@ pm2 logs
 | `tests/services/emailService.test.ts` | New | 7 tests for email sending |
 | `tests/services/notificationService.test.ts` | New | 17 tests for notifications |
 | `tests/services/passwordResetService.test.ts` | New | 8 tests for password reset |
+
+### Key Files Added/Modified (Sprint 4)
+| File | Lines | Purpose |
+|------|-------|---------|
+| `src/repositories/reportingRepository.ts` | ~580 | DB queries for all reports + dashboard KPIs |
+| `src/services/reportingService.ts` | ~420 | Business logic for financial/operational reports + dashboard |
+| `src/services/exportService.ts` | ~350 | PDF (pdfkit), Excel (ExcelJS), CSV export generation |
+| `src/routes/reports.ts` | ~320 | 22 API endpoints for reports, exports, dashboard |
+| `src/index.ts` | Modified | Mounted `/reports` route |
+| `src/services/index.ts` | Modified | Added ReportingService + ExportService exports |
+| `tests/services/reportingService.test.ts` | New | 24 tests for reporting service |
+| `tests/services/exportService.test.ts` | New | 19 tests for export service |
