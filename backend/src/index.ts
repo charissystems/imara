@@ -12,6 +12,9 @@ import { authRoutes } from './routes/auth';
 import { accountRoutes } from './routes/accounts';   // Savings accounts & transactions
 import { loanRoutes } from './routes/loans';         // Loan management
 import { reportRoutes } from './routes/reports';     // Reports & Dashboard
+import { shareRoutes } from './routes/shares';       // Share classes, holdings, dividends
+import { fixedDepositRoutes } from './routes/fixedDeposits'; // Fixed deposit products & accounts
+import { accountingRoutes } from './routes/accounting';    // Chart of accounts, journals, statements
 
 const app = createApp();
 
@@ -76,16 +79,34 @@ app.route('/members', memberRoutes);
 app.route('/accounts', accountRoutes);
 
 // ============================================================================
-// 7. LOAN MANAGEMENT
+// 7. SHARES
+// ============================================================================
+// Share classes, holdings, purchase, transfer, dividends
+app.route('/shares', shareRoutes);
+
+// ============================================================================
+// 8. FIXED DEPOSITS
+// ============================================================================
+// FD products, opening, certificates, maturity, premature withdrawal
+app.route('/fixed-deposits', fixedDepositRoutes);
+
+// ============================================================================
+// 9. LOAN MANAGEMENT
 // ============================================================================
 // Loan products, applications, approvals, repayments, early settlements
 app.route('/loans', loanRoutes);
 
 // ============================================================================
-// 8. REPORTS & DASHBOARD
+// 10. REPORTS & DASHBOARD
 // ============================================================================
 // Financial statements, operational reports, dashboard KPIs, exports
 app.route('/reports', reportRoutes);
+
+// ============================================================================
+// 11. ACCOUNTING
+// ============================================================================
+// Chart of accounts, journal entries, financial periods, year-end closing
+app.route('/accounting', accountingRoutes);
 
 // 404 Handler
 app.notFound((c) => c.json({ error: 'Not Found' }, 404));

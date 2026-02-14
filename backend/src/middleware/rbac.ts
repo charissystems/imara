@@ -56,15 +56,42 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
         { resource: 'members', action: 'create' },
         { resource: 'members', action: 'read' },
         { resource: 'members', action: 'update' },
+        { resource: 'members', action: 'delete' },
         { resource: 'loan_products', action: 'create' },
         { resource: 'loan_products', action: 'read' },
         { resource: 'loan_products', action: 'update' },
         { resource: 'savings_products', action: 'create' },
         { resource: 'savings_products', action: 'read' },
         { resource: 'savings_products', action: 'update' },
+        { resource: 'savings', action: 'create' },
+        { resource: 'savings', action: 'read' },
+        { resource: 'savings', action: 'update' },
+        { resource: 'shares', action: 'create' },
+        { resource: 'shares', action: 'read' },
+        { resource: 'shares', action: 'update' },
+        { resource: 'shares', action: 'approve' },
+        { resource: 'fixed_deposits', action: 'create' },
+        { resource: 'fixed_deposits', action: 'read' },
+        { resource: 'fixed_deposits', action: 'update' },
+        { resource: 'workflow', action: 'create' },
         { resource: 'workflows', action: 'create' },
         { resource: 'workflows', action: 'read' },
         { resource: 'workflows', action: 'update' },
+        { resource: 'chart_of_accounts', action: 'create' },
+        { resource: 'chart_of_accounts', action: 'read' },
+        { resource: 'chart_of_accounts', action: 'update' },
+        { resource: 'chart_of_accounts', action: 'approve' },
+        { resource: 'journal_entries', action: 'create' },
+        { resource: 'journal_entries', action: 'read' },
+        { resource: 'journal_entries', action: 'approve' },
+        { resource: 'financial_periods', action: 'create' },
+        { resource: 'financial_periods', action: 'read' },
+        { resource: 'financial_periods', action: 'approve' },
+        { resource: 'loans', action: 'create' },
+        { resource: 'loans', action: 'read' },
+        { resource: 'loans', action: 'update' },
+        { resource: 'loans', action: 'approve' },
+        { resource: 'loan_applications', action: 'approve' },
         { resource: 'staff', action: 'create' },
         { resource: 'staff', action: 'read' },
         { resource: 'staff', action: 'update' },
@@ -81,6 +108,12 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
         { resource: 'withdrawals', action: 'approve' }, // For withdrawal limits
         { resource: 'transfers', action: 'create' },
         { resource: 'transfers', action: 'read' },
+        { resource: 'savings', action: 'create' },
+        { resource: 'savings', action: 'read' },
+        { resource: 'shares', action: 'create' },
+        { resource: 'shares', action: 'read' },
+        { resource: 'fixed_deposits', action: 'create' },
+        { resource: 'fixed_deposits', action: 'read' },
         { resource: 'reports', action: 'read' },
     ],
     [UserRole.LOAN_OFFICER]: [
@@ -104,9 +137,15 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
         { resource: 'chart_of_accounts', action: 'create' },
         { resource: 'chart_of_accounts', action: 'read' },
         { resource: 'chart_of_accounts', action: 'update' },
+        { resource: 'chart_of_accounts', action: 'approve' },
         { resource: 'journal_entries', action: 'create' },
         { resource: 'journal_entries', action: 'read' },
+        { resource: 'journal_entries', action: 'update' },
         { resource: 'journal_entries', action: 'approve' },
+        { resource: 'financial_periods', action: 'create' },
+        { resource: 'financial_periods', action: 'read' },
+        { resource: 'financial_periods', action: 'update' },
+        { resource: 'financial_periods', action: 'approve' },
         { resource: 'bank_reconciliation', action: 'create' },
         { resource: 'bank_reconciliation', action: 'read' },
         { resource: 'bank_reconciliation', action: 'approve' },
@@ -131,6 +170,8 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
         { resource: 'deposits', action: 'read' }, // Own deposits
         { resource: 'withdrawals', action: 'create' }, // Own withdrawals
         { resource: 'withdrawals', action: 'read' }, // Own withdrawals
+        { resource: 'shares', action: 'read' }, // Own share holdings
+        { resource: 'fixed_deposits', action: 'read' }, // Own FDs
         { resource: 'statements', action: 'read' }, // Own statements
         { resource: 'statements', action: 'export' }, // Download own statements
     ],
@@ -219,7 +260,7 @@ export function enforceAnyPermission(permissions: Permission[]) {
             throw new UnauthorizedError('Authentication required');
         }
 
-        const hasAny = permissions.some(p => hasPermission(user.role, p.resource, p.action));
+        const hasAny = permissions.some(p => hasPermission(user.role!, p.resource, p.action));
 
         if (!hasAny) {
             appLogger.warn('Any permission denied', {
@@ -255,7 +296,7 @@ export function enforceAllPermissions(permissions: Permission[]) {
             throw new UnauthorizedError('Authentication required');
         }
 
-        const hasAll = permissions.every(p => hasPermission(user.role, p.resource, p.action));
+        const hasAll = permissions.every(p => hasPermission(user.role!, p.resource, p.action));
 
         if (!hasAll) {
             appLogger.warn('All permissions denied', {
