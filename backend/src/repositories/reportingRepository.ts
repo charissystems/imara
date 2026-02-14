@@ -179,8 +179,8 @@ export class ReportingRepository extends BaseRepository {
             return accounts.map((a) => {
                 const balance = parseFloat(String(a.current_balance || '0'));
                 return {
-                    account_code: a.code,
-                    account_name: a.name,
+                    account_code: a.account_code,
+                    account_name: a.account_name,
                     account_type: a.account_type,
                     normal_balance: a.normal_balance,
                     debit_balance: a.normal_balance === 'debit' ? Math.max(0, balance).toFixed(4) : Math.max(0, -balance).toFixed(4),
@@ -211,8 +211,8 @@ export class ReportingRepository extends BaseRepository {
             return accounts.map((a) => {
                 const balance = parseFloat(String(a.current_balance || '0'));
                 return {
-                    account_code: a.code,
-                    account_name: a.name,
+                    account_code: a.account_code,
+                    account_name: a.account_name,
                     account_type: a.account_type,
                     balance: Math.abs(balance).toFixed(4),
                     category: a.account_type,
@@ -858,17 +858,34 @@ export class ReportingRepository extends BaseRepository {
                 .selectFrom('activity_log')
                 .select([
                     'activity_log.id',
-                    'activity_log.action as type',
+                    'activity_log.activity_type',
                     'activity_log.description',
-                    sql<string>`NULL`.as('amount'),
-                    'activity_log.created_at',
-                    'activity_log.performed_by as actor',
+                    'activity_log.timestamp',
+                    'activity_log.user_id',
                 ])
-                .orderBy('activity_log.created_at', 'desc')
+                .orderBy('activity_log.timestamp', 'desc')
                 .limit(limit)
                 .execute();
 
-            const combined = [...transactions, ...activities]
+            const activityMapped = activities.map((a) => ({
+                id: a.id,
+                type: a.activity_type,
+                description: a.description || '',
+                amount: null as string | null,
+                created_at: a.timestamp,
+                actor: a.user_id || null,
+            }));
+
+            const txnMapped = transactions.map((t) => ({
+                id: t.id,
+                type: t.type,
+                description: t.description || '',
+                amount: t.amount,
+                created_at: t.created_at,
+                actor: t.actor,
+            }));
+
+            const combined = [...txnMapped, ...activityMapped]
                 .sort((a, b) => new Date(String(b.created_at)).getTime() - new Date(String(a.created_at)).getTime())
                 .slice(0, limit);
 

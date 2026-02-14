@@ -84,21 +84,21 @@ async function handleExport(
     totals: any,
     generatedBy: string,
     tenantName: string
-): Promise<{ buffer: Buffer; contentType: string; extension: string }> {
+): Promise<{ buffer: ArrayBuffer; contentType: string; extension: string }> {
     const options = { title, columns, data, totals, generatedBy, tenantName, generatedAt: new Date() };
 
     switch (format) {
         case 'pdf': {
-            const buffer = await exportService.generatePdf(options);
-            return { buffer, contentType: 'application/pdf', extension: 'pdf' };
+            const buf = await exportService.generatePdf(options);
+            return { buffer: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer, contentType: 'application/pdf', extension: 'pdf' };
         }
         case 'excel': {
-            const buffer = await exportService.generateExcel(options);
-            return { buffer, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', extension: 'xlsx' };
+            const buf = await exportService.generateExcel(options);
+            return { buffer: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer, contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', extension: 'xlsx' };
         }
         case 'csv': {
-            const buffer = await exportService.generateCsv(options);
-            return { buffer, contentType: 'text/csv', extension: 'csv' };
+            const buf = await exportService.generateCsv(options);
+            return { buffer: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer, contentType: 'text/csv', extension: 'csv' };
         }
     }
 }
@@ -130,9 +130,12 @@ reportRoutes.get('/financial/trial-balance/export', async (c) => {
         report.rows, report.totals, getUserId(c), getTenantName(c)
     );
 
-    c.header('Content-Type', result.contentType);
-    c.header('Content-Disposition', `attachment; filename="trial-balance-${new Date().toISOString().split('T')[0]}.${result.extension}"`);
-    return c.body(result.buffer);
+    return new Response(result.buffer, {
+        headers: {
+            'Content-Type': result.contentType,
+            'Content-Disposition': `attachment; filename="trial-balance-${new Date().toISOString().split('T')[0]}.${result.extension}"`,
+        },
+    });
 });
 
 // ── Balance Sheet ──
@@ -158,15 +161,18 @@ reportRoutes.get('/financial/balance-sheet/export', async (c) => {
         allRows, report.totals, getUserId(c), getTenantName(c)
     );
 
-    c.header('Content-Type', result.contentType);
-    c.header('Content-Disposition', `attachment; filename="balance-sheet-${new Date().toISOString().split('T')[0]}.${result.extension}"`);
-    return c.body(result.buffer);
+    return new Response(result.buffer, {
+        headers: {
+            'Content-Type': result.contentType,
+            'Content-Disposition': `attachment; filename="balance-sheet-${new Date().toISOString().split('T')[0]}.${result.extension}"`,
+        },
+    });
 });
 
 // ── Income Statement (P&L) ──
 
-reportRoutes.get('/financial/income-statement', validate('query', periodSchema), async (c) => {
-    const { period_start, period_end } = getValidatedData(c);
+reportRoutes.get('/financial/income-statement', validate(periodSchema, 'query'), async (c) => {
+    const { period_start, period_end } = getValidatedData<z.infer<typeof periodSchema>>(c);
     const service = getService(c);
     const report = await service.generateIncomeStatement(
         getUserId(c), new Date(period_start), new Date(period_end)
@@ -174,8 +180,8 @@ reportRoutes.get('/financial/income-statement', validate('query', periodSchema),
     return c.json({ success: true, data: report });
 });
 
-reportRoutes.get('/financial/income-statement/export', validate('query', periodSchema), async (c) => {
-    const { period_start, period_end } = getValidatedData(c);
+reportRoutes.get('/financial/income-statement/export', validate(periodSchema, 'query'), async (c) => {
+    const { period_start, period_end } = getValidatedData<z.infer<typeof periodSchema>>(c);
     const format = (c.req.query('format') || 'pdf') as ExportFormat;
     if (!['pdf', 'excel', 'csv'].includes(format)) throw new ValidationError('Invalid export format');
 
@@ -192,15 +198,18 @@ reportRoutes.get('/financial/income-statement/export', validate('query', periodS
         allRows, report.totals, getUserId(c), getTenantName(c)
     );
 
-    c.header('Content-Type', result.contentType);
-    c.header('Content-Disposition', `attachment; filename="income-statement-${period_start}-to-${period_end}.${result.extension}"`);
-    return c.body(result.buffer);
+    return new Response(result.buffer, {
+        headers: {
+            'Content-Type': result.contentType,
+            'Content-Disposition': `attachment; filename="income-statement-${period_start}-to-${period_end}.${result.extension}"`,
+        },
+    });
 });
 
 // ── Cash Flow Statement ──
 
-reportRoutes.get('/financial/cash-flow', validate('query', periodSchema), async (c) => {
-    const { period_start, period_end } = getValidatedData(c);
+reportRoutes.get('/financial/cash-flow', validate(periodSchema, 'query'), async (c) => {
+    const { period_start, period_end } = getValidatedData<z.infer<typeof periodSchema>>(c);
     const service = getService(c);
     const report = await service.generateCashFlowStatement(
         getUserId(c), new Date(period_start), new Date(period_end)
@@ -208,8 +217,8 @@ reportRoutes.get('/financial/cash-flow', validate('query', periodSchema), async 
     return c.json({ success: true, data: report });
 });
 
-reportRoutes.get('/financial/cash-flow/export', validate('query', periodSchema), async (c) => {
-    const { period_start, period_end } = getValidatedData(c);
+reportRoutes.get('/financial/cash-flow/export', validate(periodSchema, 'query'), async (c) => {
+    const { period_start, period_end } = getValidatedData<z.infer<typeof periodSchema>>(c);
     const format = (c.req.query('format') || 'pdf') as ExportFormat;
     if (!['pdf', 'excel', 'csv'].includes(format)) throw new ValidationError('Invalid export format');
 
@@ -226,9 +235,12 @@ reportRoutes.get('/financial/cash-flow/export', validate('query', periodSchema),
         allRows, report.totals, getUserId(c), getTenantName(c)
     );
 
-    c.header('Content-Type', result.contentType);
-    c.header('Content-Disposition', `attachment; filename="cash-flow-${period_start}-to-${period_end}.${result.extension}"`);
-    return c.body(result.buffer);
+    return new Response(result.buffer, {
+        headers: {
+            'Content-Type': result.contentType,
+            'Content-Disposition': `attachment; filename="cash-flow-${period_start}-to-${period_end}.${result.extension}"`,
+        },
+    });
 });
 
 // ════════════════════════════════════════════════════════════
@@ -260,9 +272,12 @@ reportRoutes.get('/operational/members/export', async (c) => {
         report.data, undefined, getUserId(c), getTenantName(c)
     );
 
-    c.header('Content-Type', result.contentType);
-    c.header('Content-Disposition', `attachment; filename="member-listing-${new Date().toISOString().split('T')[0]}.${result.extension}"`);
-    return c.body(result.buffer);
+    return new Response(result.buffer, {
+        headers: {
+            'Content-Type': result.contentType,
+            'Content-Disposition': `attachment; filename="member-listing-${new Date().toISOString().split('T')[0]}.${result.extension}"`,
+        },
+    });
 });
 
 // ── Savings Summary ──
@@ -285,9 +300,12 @@ reportRoutes.get('/operational/savings/export', async (c) => {
         report.data, report.totals, getUserId(c), getTenantName(c)
     );
 
-    c.header('Content-Type', result.contentType);
-    c.header('Content-Disposition', `attachment; filename="savings-summary-${new Date().toISOString().split('T')[0]}.${result.extension}"`);
-    return c.body(result.buffer);
+    return new Response(result.buffer, {
+        headers: {
+            'Content-Type': result.contentType,
+            'Content-Disposition': `attachment; filename="savings-summary-${new Date().toISOString().split('T')[0]}.${result.extension}"`,
+        },
+    });
 });
 
 // ── Loan Portfolio ──
@@ -310,9 +328,12 @@ reportRoutes.get('/operational/loans/export', async (c) => {
         report.data, report.totals, getUserId(c), getTenantName(c)
     );
 
-    c.header('Content-Type', result.contentType);
-    c.header('Content-Disposition', `attachment; filename="loan-portfolio-${new Date().toISOString().split('T')[0]}.${result.extension}"`);
-    return c.body(result.buffer);
+    return new Response(result.buffer, {
+        headers: {
+            'Content-Type': result.contentType,
+            'Content-Disposition': `attachment; filename="loan-portfolio-${new Date().toISOString().split('T')[0]}.${result.extension}"`,
+        },
+    });
 });
 
 // ── Arrears Ageing ──
@@ -335,9 +356,12 @@ reportRoutes.get('/operational/arrears/export', async (c) => {
         report.data, report.totals, getUserId(c), getTenantName(c)
     );
 
-    c.header('Content-Type', result.contentType);
-    c.header('Content-Disposition', `attachment; filename="arrears-ageing-${new Date().toISOString().split('T')[0]}.${result.extension}"`);
-    return c.body(result.buffer);
+    return new Response(result.buffer, {
+        headers: {
+            'Content-Type': result.contentType,
+            'Content-Disposition': `attachment; filename="arrears-ageing-${new Date().toISOString().split('T')[0]}.${result.extension}"`,
+        },
+    });
 });
 
 // ── NPL Report ──
@@ -360,9 +384,12 @@ reportRoutes.get('/operational/npl/export', async (c) => {
         report.data, report.totals, getUserId(c), getTenantName(c)
     );
 
-    c.header('Content-Type', result.contentType);
-    c.header('Content-Disposition', `attachment; filename="npl-report-${new Date().toISOString().split('T')[0]}.${result.extension}"`);
-    return c.body(result.buffer);
+    return new Response(result.buffer, {
+        headers: {
+            'Content-Type': result.contentType,
+            'Content-Disposition': `attachment; filename="npl-report-${new Date().toISOString().split('T')[0]}.${result.extension}"`,
+        },
+    });
 });
 
 // ── Daily Transactions ──
@@ -393,9 +420,12 @@ reportRoutes.get('/operational/transactions/export', async (c) => {
         getUserId(c), getTenantName(c)
     );
 
-    c.header('Content-Type', result.contentType);
-    c.header('Content-Disposition', `attachment; filename="daily-transactions-${dateStr}.${result.extension}"`);
-    return c.body(result.buffer);
+    return new Response(result.buffer, {
+        headers: {
+            'Content-Type': result.contentType,
+            'Content-Disposition': `attachment; filename="daily-transactions-${dateStr}.${result.extension}"`,
+        },
+    });
 });
 
 // ════════════════════════════════════════════════════════════
