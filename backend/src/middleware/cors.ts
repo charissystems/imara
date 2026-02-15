@@ -13,12 +13,19 @@ const getAllowedOrigins = (): string[] => {
         return allowedOrigins;
     }
     
-    // In development, allow localhost
-    return [
+    // In development, allow localhost and local domain
+    const baseDomain = process.env.BASE_DOMAIN || '';
+    const origins = [
         'http://localhost:3000',
         'http://localhost:5173',
         'http://localhost:8080',
     ];
+    if (baseDomain) {
+        origins.push(`http://${baseDomain}`);
+        origins.push(`http://${baseDomain}:3000`);
+        origins.push(`http://${baseDomain}:5173`);
+    }
+    return origins;
 };
 
 /**
@@ -36,9 +43,11 @@ export const corsMiddleware = honoCors({
         // Check if origin is in allowed list
         if (allowedOrigins.includes(origin)) return origin;
         
-        // In development, allow all localhost origins
-        if (process.env.NODE_ENV !== 'production' && origin.includes('localhost')) {
-            return origin;
+        // In development, allow all localhost and local domain origins
+        if (process.env.NODE_ENV !== 'production') {
+            if (origin.includes('localhost')) return origin;
+            const baseDomain = process.env.BASE_DOMAIN || '';
+            if (baseDomain && origin.includes(baseDomain)) return origin;
         }
         
         // Check for tenant subdomain pattern in production

@@ -56,7 +56,7 @@ async function getTenantBySubdomain(subdomain: string): Promise<Tenant | undefin
 
 /**
  * Extract subdomain from various sources
- * Priority: header > subdomain
+ * Priority: header > host subdomain > origin subdomain
  */
 function extractSubdomain(c: Context): string | null {
     // 1. Check custom header (highest priority - for testing/development)
@@ -95,16 +95,46 @@ function extractSubdomain(c: Context): string | null {
         return subdomain.toLowerCase().trim();
     }
 
-    // Fallback: take left-most label
+    // Fallback: take left-most label from host
     const parts = host.split('.');
     if (parts.length < 2) return null; // need at least a domain + tld
 
     const subdomain = parts[0];
     const ignoredSubdomains = ['www', 'api', 'app'];
-    if (ignoredSubdomains.includes(subdomain)) return null;
+    if (!ignoredSubdomains.includes(subdomain)) {
+        appLogger.debug('Subdomain from host', { host, subdomain });
+        return subdomain.toLowerCase().trim();
+    }
 
-    appLogger.debug('Subdomain from host', { host, subdomain });
-    return subdomain.toLowerCase().trim();
+    // 3. Extract tenant from Origin header (for SPA frontends on separate subdomains)
+    const origin = c.req.header('origin');
+    if (origin) {
+        try {
+            const originHost = new URL(origin).hostname;
+            const baseDomain = (process.env.BASE_DOMAIN || '').toLowerCase();
+
+            if (baseDomain && originHost.endsWith(baseDomain)) {
+                const prefix = originHost.slice(0, originHost.length - baseDomain.length).replace(/\.$/, '');
+                if (prefix && !ignoredSubdomains.includes(prefix)) {
+                    appLogger.debug('Subdomain from origin', { origin, subdomain: prefix });
+                    return prefix.toLowerCase().trim();
+                }
+            }
+
+            // Also support origin subdomains on localhost
+            if (originHost.includes('localhost')) {
+                const originParts = originHost.split('.');
+                if (originParts.length > 1 && originParts[0] !== 'localhost') {
+                    appLogger.debug('Subdomain from origin localhost', { origin, subdomain: originParts[0] });
+                    return originParts[0].toLowerCase().trim();
+                }
+            }
+        } catch {
+            // Invalid origin URL, skip
+        }
+    }
+
+    return null;
 }
 
 /**
