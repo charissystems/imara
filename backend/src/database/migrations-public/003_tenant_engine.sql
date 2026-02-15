@@ -40,6 +40,7 @@ RETURNS void AS $$ DECLARE
     v_role_name text := p_schema_name || '_role';
     v_constraint_rec record;
     v_constraint_def text;
+    v_policy_rec record;
 BEGIN
     -- 1. INPUT VALIDATION
     IF p_schema_name IN ('template', 'public', 'pg_catalog', 'information_schema', 'pg_toast', 'pg_temp') THEN
@@ -140,7 +141,43 @@ BEGIN
         EXECUTE v_definition;
     END LOOP;
 
-    -- 9. GRANT PERMISSIONS
+    -- 9. CLONE ROW LEVEL SECURITY POLICIES
+    --    CREATE TABLE ... LIKE ... INCLUDING ALL does NOT copy RLS enablement
+    --    or policies, so we replicate them from the template schema.
+    FOR v_policy_rec IN
+        SELECT
+            pol.tablename,
+            pol.policyname,
+            pol.permissive,
+            pol.cmd,
+            pol.qual,
+            pol.with_check
+        FROM pg_policies pol
+        WHERE pol.schemaname = 'template'
+    LOOP
+        -- Enable RLS on the target table (idempotent)
+        EXECUTE format('ALTER TABLE %I.%I ENABLE ROW LEVEL SECURITY',
+                       p_schema_name, v_policy_rec.tablename);
+
+        -- Reconstruct the CREATE POLICY statement
+        EXECUTE format(
+            'CREATE POLICY %I ON %I.%I FOR %s %s',
+            v_policy_rec.policyname,
+            p_schema_name,
+            v_policy_rec.tablename,
+            v_policy_rec.cmd,
+            CASE WHEN v_policy_rec.qual IS NOT NULL
+                 THEN 'USING (' || v_policy_rec.qual || ')'
+                 ELSE ''
+            END ||
+            CASE WHEN v_policy_rec.with_check IS NOT NULL
+                 THEN ' WITH CHECK (' || v_policy_rec.with_check || ')'
+                 ELSE ''
+            END
+        );
+    END LOOP;
+
+    -- 10. GRANT PERMISSIONS
     EXECUTE format('GRANT USAGE ON SCHEMA %I TO %I', p_schema_name, v_role_name);
     EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA %I TO %I', p_schema_name, v_role_name);
     EXECUTE format('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA %I TO %I', p_schema_name, v_role_name);
@@ -149,7 +186,7 @@ BEGIN
     -- Grant read access to public reference data (e.g. currencies)
     EXECUTE format('GRANT SELECT ON ALL TABLES IN SCHEMA public TO %I', v_role_name);
 
-    -- 10. DEFAULT PRIVILEGES
+    -- 11. DEFAULT PRIVILEGES
     EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO %I', 
                    p_schema_name, v_role_name);
     EXECUTE format('ALTER DEFAULT PRIVILEGES IN SCHEMA %I GRANT USAGE, SELECT ON SEQUENCES TO %I', 

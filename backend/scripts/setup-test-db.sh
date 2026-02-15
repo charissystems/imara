@@ -85,5 +85,18 @@ psql -U "$DB_USER" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -d "$DB_NAME" -f "$TE
 psql -U "$DB_USER" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -d "$DB_NAME" -f "$TEMPLATE_MIGRATIONS/008_messaging.sql"
 psql -U "$DB_USER" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -d "$DB_NAME" -f "$TEMPLATE_MIGRATIONS/009_audit_and_security.sql"
 psql -U "$DB_USER" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -d "$DB_NAME" -f "$TEMPLATE_MIGRATIONS/010_system_administration.sql"
+psql -U "$DB_USER" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -d "$DB_NAME" -f "$TEMPLATE_MIGRATIONS/011_row_level_security.sql"
 
+
+# ========= 6. Provision test tenant for integration tests =========
+echo "Provisioning integration-test tenant (tenant_testsacco)..."
+psql -U "$DB_USER" -h "$POSTGRES_HOST" -p "$POSTGRES_PORT" -d "$DB_NAME" -v ON_ERROR_STOP=1 <<'EOSQL'
+SELECT public.create_tenant_with_security(
+    'tenant_testsacco',
+    'testsacco',
+    'testpassword12!',
+    'test@testsacco.local',
+    '+254700000000'
+);
+EOSQL
 echo "Test Database Setup Complete"
