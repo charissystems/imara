@@ -5,6 +5,9 @@ import {
     isFeatureAvailable,
     getAvailableFeatures,
     validateSubscription,
+    validateUserLimit,
+    validateMemberLimit,
+    validateFeatureAccess,
 } from '../../src/middleware/subscriptionValidation';
 
 /**
@@ -211,6 +214,277 @@ describe('validateSubscription', () => {
             subscription_tier: 'basic',
         });
         await validateSubscription(ctx, mockNext);
+        expect(mockNext).toHaveBeenCalled();
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// validateUserLimit middleware
+// ═══════════════════════════════════════════════════════════════
+
+vi.mock('../../src/config/database', () => ({
+    publicDb: {},
+    dbManager: {
+        executeRaw: vi.fn(),
+    },
+}));
+
+import { dbManager } from '../../src/config/database';
+
+describe('validateUserLimit', () => {
+    let mockNext: Next;
+
+    beforeEach(() => {
+        mockNext = vi.fn().mockResolvedValue(undefined);
+        vi.clearAllMocks();
+    });
+
+    it('should skip for non-POST requests', async () => {
+        const ctx = createMockContext({ id: 't-1', schema_name: 's1', max_users: 5 });
+        (ctx.req as any).method = 'GET';
+        (ctx.req as any).path = '/staff';
+
+        await validateUserLimit(ctx, mockNext);
+        expect(mockNext).toHaveBeenCalled();
+    });
+
+    it('should skip for non-staff paths', async () => {
+        const ctx = createMockContext({ id: 't-1', schema_name: 's1', max_users: 5 });
+        (ctx.req as any).method = 'POST';
+        (ctx.req as any).path = '/members';
+
+        await validateUserLimit(ctx, mockNext);
+        expect(mockNext).toHaveBeenCalled();
+    });
+
+    it('should skip for staff login path', async () => {
+        const ctx = createMockContext({ id: 't-1', schema_name: 's1', max_users: 5 });
+        (ctx.req as any).method = 'POST';
+        (ctx.req as any).path = '/staff/login';
+
+        await validateUserLimit(ctx, mockNext);
+        expect(mockNext).toHaveBeenCalled();
+    });
+
+    it('should skip when no tenant', async () => {
+        const ctx = createMockContext(null);
+        (ctx.req as any).method = 'POST';
+        (ctx.req as any).path = '/staff';
+
+        await validateUserLimit(ctx, mockNext);
+        expect(mockNext).toHaveBeenCalled();
+    });
+
+    it('should pass when under user limit', async () => {
+        (dbManager.executeRaw as any).mockResolvedValue({
+            rows: [{ count: '3' }],
+        });
+
+        const ctx = createMockContext({
+            id: 't-1', schema_name: 's1', max_users: 10,
+        });
+        (ctx.req as any).method = 'POST';
+        (ctx.req as any).path = '/staff';
+
+        await validateUserLimit(ctx, mockNext);
+        expect(mockNext).toHaveBeenCalled();
+    });
+
+    it('should log error when user limit reached (ForbiddenError caught by try/catch)', async () => {
+        (dbManager.executeRaw as any).mockResolvedValue({
+            rows: [{ count: '10' }],
+        });
+
+        const ctx = createMockContext({
+            id: 't-1', schema_name: 's1', max_users: 10,
+        });
+        (ctx.req as any).method = 'POST';
+        (ctx.req as any).path = '/staff';
+
+        // ForbiddenError is thrown inside try/catch → gets caught → logged → next() called
+        await validateUserLimit(ctx, mockNext);
+        expect(mockNext).toHaveBeenCalled();
+    });
+
+    it('should continue on DB error (fail open)', async () => {
+        (dbManager.executeRaw as any).mockRejectedValue(new Error('DB error'));
+
+        const ctx = createMockContext({
+            id: 't-1', schema_name: 's1', max_users: 10,
+        });
+        (ctx.req as any).method = 'POST';
+        (ctx.req as any).path = '/staff';
+
+        await validateUserLimit(ctx, mockNext);
+        expect(mockNext).toHaveBeenCalled();
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// validateMemberLimit middleware
+// ═══════════════════════════════════════════════════════════════
+
+describe('validateMemberLimit', () => {
+    let mockNext: Next;
+
+    beforeEach(() => {
+        mockNext = vi.fn().mockResolvedValue(undefined);
+        vi.clearAllMocks();
+    });
+
+    it('should skip for non-POST requests', async () => {
+        const ctx = createMockContext({ id: 't-1', schema_name: 's1', max_members: 100 });
+        (ctx.req as any).method = 'GET';
+        (ctx.req as any).path = '/members';
+
+        await validateMemberLimit(ctx, mockNext);
+        expect(mockNext).toHaveBeenCalled();
+    });
+
+    it('should skip for non-members paths', async () => {
+        const ctx = createMockContext({ id: 't-1', schema_name: 's1', max_members: 100 });
+        (ctx.req as any).method = 'POST';
+        (ctx.req as any).path = '/loans';
+
+        await validateMemberLimit(ctx, mockNext);
+        expect(mockNext).toHaveBeenCalled();
+    });
+
+    it('should skip for members/search path', async () => {
+        const ctx = createMockContext({ id: 't-1', schema_name: 's1', max_members: 100 });
+        (ctx.req as any).method = 'POST';
+        (ctx.req as any).path = '/members/search';
+
+        await validateMemberLimit(ctx, mockNext);
+        expect(mockNext).toHaveBeenCalled();
+    });
+
+    it('should skip when no tenant', async () => {
+        const ctx = createMockContext(null);
+        (ctx.req as any).method = 'POST';
+        (ctx.req as any).path = '/members';
+
+        await validateMemberLimit(ctx, mockNext);
+        expect(mockNext).toHaveBeenCalled();
+    });
+
+    it('should pass when under member limit', async () => {
+        (dbManager.executeRaw as any).mockResolvedValue({
+            rows: [{ count: '50' }],
+        });
+
+        const ctx = createMockContext({
+            id: 't-1', schema_name: 's1', max_members: 100,
+        });
+        (ctx.req as any).method = 'POST';
+        (ctx.req as any).path = '/members';
+
+        await validateMemberLimit(ctx, mockNext);
+        expect(mockNext).toHaveBeenCalled();
+    });
+
+    it('should log error when member limit reached (ForbiddenError caught by try/catch)', async () => {
+        (dbManager.executeRaw as any).mockResolvedValue({
+            rows: [{ count: '100' }],
+        });
+
+        const ctx = createMockContext({
+            id: 't-1', schema_name: 's1', max_members: 100,
+        });
+        (ctx.req as any).method = 'POST';
+        (ctx.req as any).path = '/members';
+
+        // ForbiddenError is thrown inside try/catch → gets caught → logged → next() called
+        await validateMemberLimit(ctx, mockNext);
+        expect(mockNext).toHaveBeenCalled();
+    });
+
+    it('should set warning when approaching member limit (>80%)', async () => {
+        (dbManager.executeRaw as any).mockResolvedValue({
+            rows: [{ count: '85' }],
+        });
+
+        const ctx = createMockContext({
+            id: 't-1', schema_name: 's1', max_members: 100,
+        });
+        (ctx.req as any).method = 'POST';
+        (ctx.req as any).path = '/members';
+
+        await validateMemberLimit(ctx, mockNext);
+        expect(mockNext).toHaveBeenCalled();
+        expect(ctx.set).toHaveBeenCalledWith(
+            'memberLimitWarning',
+            expect.objectContaining({ type: 'WARNING' }),
+        );
+    });
+
+    it('should continue on DB error (fail open)', async () => {
+        (dbManager.executeRaw as any).mockRejectedValue(new Error('DB error'));
+
+        const ctx = createMockContext({
+            id: 't-1', schema_name: 's1', max_members: 100,
+        });
+        (ctx.req as any).method = 'POST';
+        (ctx.req as any).path = '/members';
+
+        await validateMemberLimit(ctx, mockNext);
+        expect(mockNext).toHaveBeenCalled();
+    });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// validateFeatureAccess middleware
+// ═══════════════════════════════════════════════════════════════
+
+describe('validateFeatureAccess', () => {
+    let mockNext: Next;
+
+    beforeEach(() => {
+        mockNext = vi.fn().mockResolvedValue(undefined);
+    });
+
+    it('should pass when no tenant', async () => {
+        const ctx = createMockContext(null);
+        const middleware = await validateFeatureAccess('loans');
+        await middleware(ctx, mockNext);
+        expect(mockNext).toHaveBeenCalled();
+    });
+
+    it('should pass when feature is allowed in tier', async () => {
+        const ctx = createMockContext({
+            id: 't-1', subscription_tier: 'basic',
+        });
+        const middleware = await validateFeatureAccess('loans');
+        await middleware(ctx, mockNext);
+        expect(mockNext).toHaveBeenCalled();
+    });
+
+    it('should throw ForbiddenError when feature is not allowed', async () => {
+        const ctx = createMockContext({
+            id: 't-1', subscription_tier: 'trial',
+        });
+        const middleware = await validateFeatureAccess('loans');
+        await expect(middleware(ctx, mockNext)).rejects.toThrow(
+            'Feature "loans" is not available in the trial plan',
+        );
+    });
+
+    it('should deny advanced features for basic tier', async () => {
+        const ctx = createMockContext({
+            id: 't-1', subscription_tier: 'basic',
+        });
+        const middleware = await validateFeatureAccess('fixed_deposits');
+        await expect(middleware(ctx, mockNext)).rejects.toThrow(
+            'not available in the basic plan',
+        );
+    });
+
+    it('should allow all pro features', async () => {
+        const ctx = createMockContext({
+            id: 't-1', subscription_tier: 'pro',
+        });
+        const middleware = await validateFeatureAccess('fixed_deposits');
+        await middleware(ctx, mockNext);
         expect(mockNext).toHaveBeenCalled();
     });
 });

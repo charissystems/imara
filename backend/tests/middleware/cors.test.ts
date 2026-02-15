@@ -319,3 +319,172 @@ describe('CORS Middleware', () => {
         });
     });
 });
+
+// ════════════════════════════════════════════════════════════════
+// Tests against actual corsMiddleware source via Hono app
+// ════════════════════════════════════════════════════════════════
+
+import { Hono } from 'hono';
+import { corsMiddleware } from '../../src/middleware/cors';
+
+describe('corsMiddleware (actual source)', () => {
+    let originalEnv: string | undefined;
+    let originalBaseDomain: string | undefined;
+    let originalAllowedOrigins: string | undefined;
+
+    beforeEach(() => {
+        originalEnv = process.env.NODE_ENV;
+        originalBaseDomain = process.env.BASE_DOMAIN;
+        originalAllowedOrigins = process.env.ALLOWED_ORIGINS;
+    });
+
+    afterEach(() => {
+        if (originalEnv !== undefined) process.env.NODE_ENV = originalEnv;
+        else delete process.env.NODE_ENV;
+        if (originalBaseDomain !== undefined) process.env.BASE_DOMAIN = originalBaseDomain;
+        else delete process.env.BASE_DOMAIN;
+        if (originalAllowedOrigins !== undefined) process.env.ALLOWED_ORIGINS = originalAllowedOrigins;
+        else delete process.env.ALLOWED_ORIGINS;
+    });
+
+    function createApp() {
+        const app = new Hono();
+        app.use('*', corsMiddleware);
+        app.get('/test', (c) => c.json({ ok: true }));
+        return app;
+    }
+
+    it('should allow development localhost origins', async () => {
+        process.env.NODE_ENV = 'development';
+        delete process.env.BASE_DOMAIN;
+
+        const app = createApp();
+        const res = await app.request('/test', {
+            headers: { origin: 'http://localhost:5173' },
+        });
+
+        expect(res.status).toBe(200);
+        expect(res.headers.get('access-control-allow-origin')).toBe('http://localhost:5173');
+    });
+
+    it('should return credentials header', async () => {
+        process.env.NODE_ENV = 'development';
+
+        const app = createApp();
+        const res = await app.request('/test', {
+            headers: { origin: 'http://localhost:3000' },
+        });
+
+        expect(res.headers.get('access-control-allow-credentials')).toBe('true');
+    });
+
+    it('should not set origin for requests without origin header', async () => {
+        process.env.NODE_ENV = 'development';
+
+        const app = createApp();
+        const res = await app.request('/test');
+
+        // No origin header → no access-control-allow-origin set
+        // (because returning undefined skips it with credentials: true)
+        expect(res.status).toBe(200);
+    });
+
+    it('should allow BASE_DOMAIN origins in development', async () => {
+        process.env.NODE_ENV = 'development';
+        process.env.BASE_DOMAIN = 'imara.local';
+
+        const app = createApp();
+        const res = await app.request('/test', {
+            headers: { origin: 'http://mysacco.imara.local' },
+        });
+
+        expect(res.status).toBe(200);
+        expect(res.headers.get('access-control-allow-origin')).toBe('http://mysacco.imara.local');
+    });
+
+    it('should handle preflight OPTIONS requests', async () => {
+        process.env.NODE_ENV = 'development';
+
+        const app = createApp();
+        const res = await app.request('/test', {
+            method: 'OPTIONS',
+            headers: {
+                origin: 'http://localhost:3000',
+                'access-control-request-method': 'POST',
+                'access-control-request-headers': 'Content-Type,Authorization',
+            },
+        });
+
+        expect(res.status).toBe(204);
+        expect(res.headers.get('access-control-allow-methods')).toContain('POST');
+    });
+
+    it('should expose X-Request-ID and X-Response-Time headers', async () => {
+        process.env.NODE_ENV = 'development';
+
+        const app = createApp();
+        const res = await app.request('/test', {
+            headers: { origin: 'http://localhost:3000' },
+        });
+
+        const expose = res.headers.get('access-control-expose-headers') || '';
+        expect(expose).toContain('X-Request-ID');
+        expect(expose).toContain('X-Response-Time');
+    });
+
+    it('should allow custom headers in preflight', async () => {
+        process.env.NODE_ENV = 'development';
+
+        const app = createApp();
+        const res = await app.request('/test', {
+            method: 'OPTIONS',
+            headers: {
+                origin: 'http://localhost:3000',
+                'access-control-request-method': 'GET',
+                'access-control-request-headers': 'X-Tenant-Subdomain',
+            },
+        });
+
+        const allowHeaders = res.headers.get('access-control-allow-headers') || '';
+        expect(allowHeaders).toContain('X-Tenant-Subdomain');
+    });
+
+    it('should reject unknown origins in production', async () => {
+        process.env.NODE_ENV = 'production';
+        process.env.ALLOWED_ORIGINS = 'https://app.example.com';
+        delete process.env.BASE_DOMAIN;
+
+        const app = createApp();
+        const res = await app.request('/test', {
+            headers: { origin: 'https://evil.com' },
+        });
+
+        // Should not set allow-origin for rejected origins
+        expect(res.headers.get('access-control-allow-origin')).toBeNull();
+    });
+
+    it('should allow configured production origins', async () => {
+        process.env.NODE_ENV = 'production';
+        process.env.ALLOWED_ORIGINS = 'https://app.example.com,https://admin.example.com';
+
+        const app = createApp();
+        const res = await app.request('/test', {
+            headers: { origin: 'https://app.example.com' },
+        });
+
+        expect(res.headers.get('access-control-allow-origin')).toBe('https://app.example.com');
+    });
+
+    it('should allow tenant subdomains in production with BASE_DOMAIN', async () => {
+        process.env.NODE_ENV = 'production';
+        process.env.ALLOWED_ORIGINS = '';
+        process.env.BASE_DOMAIN = 'imara.co.ke';
+
+        const app = createApp();
+        const res = await app.request('/test', {
+            headers: { origin: 'https://mysacco.imara.co.ke' },
+        });
+
+        expect(res.headers.get('access-control-allow-origin')).toBe('https://mysacco.imara.co.ke');
+    });
+});

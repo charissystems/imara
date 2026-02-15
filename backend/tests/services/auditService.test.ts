@@ -1,9 +1,10 @@
 // tests/services/auditService.test.ts
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { AuditService } from '../../src/services/auditService';
 
 /**
- * AuditService Unit Tests
- * Tests query building logic and reversal business rules
+ * AuditService Tests
+ * Tests query building logic and reversal business rules with real service instances
  */
 
 // ─── Mock DB Builder ────────────────────────────────────────
@@ -20,25 +21,251 @@ function createMockQueryBuilder(rows: any[] = []) {
         executeTakeFirst: vi.fn().mockResolvedValue(rows[0] ?? undefined),
         returning: vi.fn().mockReturnThis(),
         values: vi.fn().mockReturnThis(),
+        insertInto: vi.fn().mockReturnThis(),
     };
     return builder;
 }
 
 function createMockDb(overrides: Record<string, any> = {}) {
+    const insertBuilder = {
+        values: vi.fn().mockReturnValue({
+            returning: vi.fn().mockReturnValue({
+                execute: vi.fn().mockResolvedValue(overrides.insertRows || [{ id: 'new-id' }]),
+            }),
+            execute: vi.fn().mockResolvedValue(undefined),
+        }),
+    };
+
     return {
         selectFrom: vi.fn().mockReturnValue(createMockQueryBuilder(overrides.selectRows || [])),
-        insertInto: vi.fn().mockReturnValue({
-            values: vi.fn().mockReturnValue({
-                returning: vi.fn().mockReturnValue({
-                    execute: vi.fn().mockResolvedValue(overrides.insertRows || [{ id: 'new-id' }]),
-                }),
-                execute: vi.fn().mockResolvedValue(undefined),
-            }),
-        }),
+        insertInto: vi.fn().mockReturnValue(insertBuilder),
     } as any;
 }
 
-// ─── Audit Trail Query Logic ────────────────────────────────
+// ─── Actual Service Tests ───────────────────────────────────
+
+describe('AuditService - queryAuditTrail', () => {
+    it('should query audit trail with all filters', async () => {
+        const mockRows = [
+            { id: 'audit-1', entity_type: 'deposit', entity_id: 'dep-1', change_type: 'insert', user_id: 'user-1' },
+            { id: 'audit-2', entity_type: 'deposit', entity_id: 'dep-2', change_type: 'update', user_id: 'user-1' },
+        ];
+        const mockDb = createMockDb({ selectRows: mockRows });
+        const service = new AuditService(mockDb);
+
+        const result = await service.queryAuditTrail({
+            entity_type: 'deposit',
+            entity_id: 'dep-1',
+            change_type: 'insert',
+            user_id: 'user-1',
+            date_from: '2026-01-01',
+            date_to: '2026-12-31',
+            page: 1,
+            limit: 50,
+        });
+
+        expect(result).toEqual(mockRows);
+        expect(mockDb.selectFrom).toHaveBeenCalledWith('audit_log');
+    });
+
+    it('should query with partial filters', async () => {
+        const mockRows = [{ id: 'audit-1', entity_type: 'withdrawal' }];
+        const mockDb = createMockDb({ selectRows: mockRows });
+        const service = new AuditService(mockDb);
+
+        const result = await service.queryAuditTrail({
+            entity_type: 'withdrawal',
+            page: 1,
+            limit: 20,
+        });
+
+        expect(result).toEqual(mockRows);
+    });
+
+    it('should handle pagination correctly', async () => {
+        const mockDb = createMockDb({ selectRows: [] });
+        const service = new AuditService(mockDb);
+
+        await service.queryAuditTrail({
+            page: 3,
+            limit: 20,
+        });
+
+        const builder = mockDb.selectFrom('audit_log');
+        expect(builder.limit).toHaveBeenCalledWith(20);
+        expect(builder.offset).toHaveBeenCalledWith(40); // (3-1) * 20
+    });
+});
+
+describe('AuditService - queryActivityLog', () => {
+    it('should query activity log with filters', async () => {
+        const mockRows = [
+            { id: 'activity-1', entity_type: 'login', user_id: 'user-1' },
+        ];
+        const mockDb = createMockDb({ selectRows: mockRows });
+        const service = new AuditService(mockDb);
+
+        const result = await service.queryActivityLog({
+            entity_type: 'login',
+            user_id: 'user-1',
+            page: 1,
+            limit: 50,
+        });
+
+        expect(result).toEqual(mockRows);
+        expect(mockDb.selectFrom).toHaveBeenCalledWith('activity_log');
+    });
+
+    it('should handle date range filters', async () => {
+        const mockDb = createMockDb({ selectRows: [] });
+        const service = new AuditService(mockDb);
+
+        await service.queryActivityLog({
+            date_from: '2026-01-01',
+            date_to: '2026-01-31',
+            page: 1,
+            limit: 100,
+        });
+
+        expect(mockDb.selectFrom).toHaveBeenCalledWith('activity_log');
+    });
+});
+
+describe('AuditService - querySecurityEvents', () => {
+    it('should query security events with severity filter', async () => {
+        const mockRows = [
+            { id: 'event-1', severity: 'high', event_type: 'login_failed' },
+        ];
+        const mockDb = createMockDb({ selectRows: mockRows });
+        const service = new AuditService(mockDb);
+
+        const result = await service.querySecurityEvents({
+            severity: 'high',
+            page: 1,
+            limit: 50,
+        });
+
+        expect(result).toEqual(mockRows);
+        expect(mockDb.selectFrom).toHaveBeenCalledWith('security_events');
+    });
+
+    it('should filter by event type', async () => {
+        const mockDb = createMockDb({ selectRows: [] });
+        const service = new AuditService(mockDb);
+
+        await service.querySecurityEvents({
+            event_type: 'suspicious_activity',
+            user_id: 'user-123',
+            page: 1,
+            limit: 25,
+        });
+
+        expect(mockDb.selectFrom).toHaveBeenCalledWith('security_events');
+    });
+});
+
+describe('AuditService - initiateReversal', () => {
+    it('should create reversal audit entry', async () => {
+        const mockDb = createMockDb({ insertRows: [{ id: 'reversal-001' }] });
+        const service = new AuditService(mockDb);
+
+        const result = await service.initiateReversal({
+            entity_type: 'deposit',
+            entity_id: 'dep-123',
+            reason: 'Duplicate transaction',
+            initiated_by: 'user-1',
+            user_ip: '192.168.1.1',
+        });
+
+        expect(result).toEqual({
+            reversal_id: 'reversal-001',
+            status: 'pending_approval',
+        });
+        expect(mockDb.insertInto).toHaveBeenCalledWith('audit_log');
+    });
+
+    it('should handle missing user IP', async () => {
+        const mockDb = createMockDb({ insertRows: [{ id: 'reversal-002' }] });
+        const service = new AuditService(mockDb);
+
+        const result = await service.initiateReversal({
+            entity_type: 'withdrawal',
+            entity_id: 'wth-456',
+            reason: 'Incorrect amount',
+            initiated_by: 'user-2',
+        });
+
+        expect(result.reversal_id).toBe('reversal-002');
+        expect(result.status).toBe('pending_approval');
+    });
+});
+
+describe('AuditService - approveReversal', () => {
+    it('should approve reversal with different approver', async () => {
+        const mockReversal = {
+            id: 'reversal-001',
+            user_id: 'user-1',
+            action: 'reversal_initiated',
+            entity_type: 'deposit',
+            entity_id: 'dep-123',
+        };
+
+        const selectBuilder = createMockQueryBuilder([mockReversal]);
+        const insertBuilder = {
+            values: vi.fn().mockReturnValue({
+                execute: vi.fn().mockResolvedValue([{ id: 'approval-001' }]),
+            }),
+        };
+
+        const mockDb = {
+            selectFrom: vi.fn().mockReturnValue(selectBuilder),
+            insertInto: vi.fn().mockReturnValue(insertBuilder),
+        } as any;
+
+        const service = new AuditService(mockDb);
+
+        const result = await service.approveReversal('reversal-001', 'user-2');
+
+        expect(result).toEqual({
+            reversal_id: 'reversal-001',
+            status: 'approved',
+        });
+        expect(mockDb.insertInto).toHaveBeenCalledWith('audit_log');
+    });
+
+    it('should reject when reversal not found', async () => {
+        const mockDb = createMockDb({ selectRows: [] });
+        const service = new AuditService(mockDb);
+
+        await expect(
+            service.approveReversal('non-existent', 'user-1')
+        ).rejects.toThrow('Reversal request not found');
+    });
+
+    it('should reject self-approval', async () => {
+        const mockReversal = {
+            id: 'reversal-001',
+            user_id: 'user-1',
+            action: 'reversal_initiated',
+            entity_type: 'deposit',
+            entity_id: 'dep-123',
+        };
+
+        const selectBuilder = createMockQueryBuilder([mockReversal]);
+        const mockDb = {
+            selectFrom: vi.fn().mockReturnValue(selectBuilder),
+            insertInto: vi.fn(),
+        } as any;
+
+        const service = new AuditService(mockDb);
+
+        await expect(
+            service.approveReversal('reversal-001', 'user-1')
+        ).rejects.toThrow('dual authorization');
+    });
+});
+
+// ─── Legacy Filter Logic Tests ──────────────────────────────
 
 describe('AuditService - Query Logic', () => {
     describe('queryAuditTrail', () => {
@@ -71,119 +298,6 @@ describe('AuditService - Query Logic', () => {
                 expect(typeof s).toBe('string');
                 expect(s.length).toBeGreaterThan(0);
             }
-        });
-
-        it('should accept valid event types', () => {
-            const validEventTypes = [
-                'login_failed',
-                'account_locked',
-                'permission_denied',
-                'suspicious_activity',
-            ];
-            for (const e of validEventTypes) {
-                expect(typeof e).toBe('string');
-            }
-        });
-    });
-});
-
-// ─── Reversal Business Logic ────────────────────────────────
-
-describe('AuditService - Reversal Logic', () => {
-    describe('initiateReversal', () => {
-        it('should create reversal with pending_approval status', async () => {
-            const db = createMockDb({ insertRows: [{ id: 'rev-001' }] });
-
-            // Simulate the service insert call
-            const [entry] = await db
-                .insertInto('audit_log')
-                .values({
-                    user_id: 'user-1',
-                    user_ip_address: '192.168.1.1',
-                    action: 'reversal_initiated',
-                    entity_type: 'deposit',
-                    entity_id: 'dep-001',
-                    change_type: 'update',
-                    new_values: JSON.stringify({ status: 'pending_reversal', reason: 'Duplicate' }),
-                    status: 'success',
-                })
-                .returning('id')
-                .execute();
-
-            expect(entry.id).toBe('rev-001');
-            expect(db.insertInto).toHaveBeenCalledWith('audit_log');
-        });
-
-        it('should include user IP when provided', () => {
-            const data = {
-                entity_type: 'deposit',
-                entity_id: 'dep-001',
-                reason: 'Duplicate transaction',
-                initiated_by: 'user-1',
-                user_ip: '10.0.0.1',
-            };
-            expect(data.user_ip).toBe('10.0.0.1');
-        });
-
-        it('should handle missing user IP gracefully', () => {
-            const data = {
-                entity_type: 'deposit',
-                entity_id: 'dep-001',
-                reason: 'Duplicate transaction',
-                initiated_by: 'user-1',
-                user_ip: undefined,
-            };
-            expect(data.user_ip || null).toBeNull();
-        });
-    });
-
-    describe('approveReversal', () => {
-        it('should enforce dual authorization (different user)', () => {
-            const reversalUserId = 'user-1';
-            const approverId = 'user-1';
-            expect(reversalUserId === approverId).toBe(true);
-            // This case should throw in the actual service
-        });
-
-        it('should allow approval by different user', () => {
-            const reversalUserId = 'user-1';
-            const approverId = 'user-2';
-            expect(reversalUserId === approverId).toBe(false);
-        });
-
-        it('should reject when reversal not found', async () => {
-            const db = createMockDb({ selectRows: [] });
-
-            const reversal = await db
-                .selectFrom('audit_log')
-                .selectAll()
-                .where('id', '=', 'non-existent')
-                .where('action', '=', 'reversal_initiated')
-                .executeTakeFirst();
-
-            expect(reversal).toBeUndefined();
-        });
-
-        it('should find reversal with matching action', async () => {
-            const mockReversal = {
-                id: 'rev-001',
-                user_id: 'user-1',
-                action: 'reversal_initiated',
-                entity_type: 'deposit',
-                entity_id: 'dep-001',
-            };
-            const db = createMockDb({ selectRows: [mockReversal] });
-
-            const reversal = await db
-                .selectFrom('audit_log')
-                .selectAll()
-                .where('id', '=', 'rev-001')
-                .where('action', '=', 'reversal_initiated')
-                .executeTakeFirst();
-
-            expect(reversal).toBeDefined();
-            expect(reversal.user_id).toBe('user-1');
-            expect(reversal.action).toBe('reversal_initiated');
         });
     });
 });

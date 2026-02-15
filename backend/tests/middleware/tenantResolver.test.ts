@@ -371,3 +371,96 @@ describe('Tenant Resolver Middleware', () => {
         });
     });
 });
+
+// ════════════════════════════════════════════════════════════════
+// Tests against actual source code exports
+// ════════════════════════════════════════════════════════════════
+
+import { vi } from 'vitest';
+
+vi.mock('../../src/config/database', () => ({
+    publicDb: {
+        selectFrom: vi.fn().mockReturnValue({
+            selectAll: vi.fn().mockReturnThis(),
+            where: vi.fn().mockReturnThis(),
+            executeTakeFirst: vi.fn().mockResolvedValue(undefined),
+        }),
+    },
+}));
+
+vi.mock('../../src/services/cacheService', () => ({
+    globalCacheGet: vi.fn().mockResolvedValue(null),
+    globalCacheSet: vi.fn().mockResolvedValue(undefined),
+    globalCacheInvalidate: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../../src/middleware/logger', () => ({
+    appLogger: {
+        debug: vi.fn(),
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+    },
+}));
+
+import {
+    tenantResolver,
+    clearTenantCache,
+} from '../../src/middleware/tenantResolver';
+import { globalCacheInvalidate } from '../../src/services/cacheService';
+
+describe('tenantResolver (actual source)', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    it('should throw NotFoundError when no subdomain can be extracted', async () => {
+        const ctx = {
+            req: {
+                header: vi.fn().mockReturnValue(undefined),
+            },
+            set: vi.fn(),
+            get: vi.fn(),
+        } as any;
+
+        const next = vi.fn();
+
+        await expect(tenantResolver(ctx, next)).rejects.toThrow(
+            'Unable to determine tenant',
+        );
+    });
+
+    it('should throw NotFoundError when tenant is not in database', async () => {
+        const ctx = {
+            req: {
+                header: vi.fn((name: string) => {
+                    if (name === 'x-tenant-subdomain') return 'unknown-sacco';
+                    return undefined;
+                }),
+            },
+            set: vi.fn(),
+            get: vi.fn(),
+        } as any;
+
+        const next = vi.fn();
+
+        await expect(tenantResolver(ctx, next)).rejects.toThrow();
+    });
+});
+
+describe('clearTenantCache (actual source)', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    it('should clear specific subdomain cache', () => {
+        clearTenantCache('test-sacco');
+        expect(globalCacheInvalidate).toHaveBeenCalledWith('tenant:test-sacco');
+    });
+
+    it('should clear all tenant cache when no subdomain given', () => {
+        clearTenantCache();
+        // Should not call globalCacheInvalidate for specific key
+        expect(globalCacheInvalidate).not.toHaveBeenCalled();
+    });
+});

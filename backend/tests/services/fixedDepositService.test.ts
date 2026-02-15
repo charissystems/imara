@@ -1,6 +1,73 @@
 // tests/services/fixedDepositService.test.ts
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import Decimal from 'decimal.js';
+import { FixedDepositService } from '../../src/services/fixedDepositService';
+
+// ────────────────────────────────────────────────────────────
+// Mock DB Builder
+// ────────────────────────────────────────────────────────────
+
+function createMockQueryBuilder(rows: any[] = []) {
+    const builder: any = {
+        selectAll: vi.fn().mockReturnThis(),
+        select: vi.fn().mockReturnThis(),
+        innerJoin: vi.fn().mockReturnThis(),
+        leftJoin: vi.fn().mockReturnThis(),
+        where: vi.fn().mockReturnThis(),
+        orderBy: vi.fn().mockReturnThis(),
+        limit: vi.fn().mockReturnThis(),
+        offset: vi.fn().mockReturnThis(),
+        execute: vi.fn().mockResolvedValue(rows),
+        executeTakeFirst: vi.fn().mockResolvedValue(rows[0] ?? undefined),
+        returning: vi.fn().mockReturnThis(),
+        values: vi.fn().mockReturnThis(),
+        set: vi.fn().mockReturnThis(),
+    };
+    return builder;
+}
+
+function createMockDb(overrides: Record<string, any> = {}) {
+    const insertBuilder = {
+        values: vi.fn().mockReturnValue({
+            returning: vi.fn().mockReturnValue({
+                execute: vi.fn().mockResolvedValue(overrides.insertRows || [{ id: 'new-id' }]),
+            }),
+            execute: vi.fn().mockResolvedValue([]),
+        }),
+    };
+
+    const updateBuilder = {
+        set: vi.fn().mockReturnValue({
+            where: vi.fn().mockReturnValue({
+                execute: vi.fn().mockResolvedValue([]),
+            }),
+        }),
+    };
+
+    return {
+        selectFrom: vi.fn().mockReturnValue(createMockQueryBuilder(overrides.selectRows || [])),
+        insertInto: vi.fn().mockReturnValue(insertBuilder),
+        updateTable: vi.fn().mockReturnValue(updateBuilder),
+    } as any;
+}
+
+// ────────────────────────────────────────────────────────────
+// Actual Service Tests
+// ────────────────────────────────────────────────────────────
+
+describe('FixedDepositService - runMaturityCheck', () => {
+    it('should return empty result when no deposits to process', async () => {
+        const mockDb = createMockDb({ selectRows: [] });
+        const service = new FixedDepositService(mockDb);
+
+        const result = await service.runMaturityCheck(new Date('2026-03-01'));
+
+        expect(result.alertsSent).toBe(0);
+        expect(result.depositsMatured).toBe(0);
+        expect(result.depositsRolledOver).toBe(0);
+        expect(result.errors).toHaveLength(0);
+    });
+});
 
 // ────────────────────────────────────────────────────────────
 // FD Interest Calculation Logic Tests
@@ -366,5 +433,309 @@ describe('FixedDepositService - Maturity Alert Thresholds', () => {
         expect(alertDates[2].targetMaturityDate).toBe('2025-01-22');
         // 0 days: maturity today Jan 15
         expect(alertDates[3].targetMaturityDate).toBe('2025-01-15');
+    });
+});
+
+// ────────────────────────────────────────────────────────────
+// runDailyInterestAccrual — via mock DB
+// ────────────────────────────────────────────────────────────
+
+describe('FixedDepositService - runDailyInterestAccrual', () => {
+    it('should return empty result when no active deposits', async () => {
+        const mockDb = createMockDb({ selectRows: [] });
+        const service = new FixedDepositService(mockDb);
+
+        const result = await service.runDailyInterestAccrual(new Date('2026-03-01'));
+
+        expect(result.depositsProcessed).toBe(0);
+        expect(result.totalInterestAccrued.toNumber()).toBe(0);
+        expect(result.errors).toHaveLength(0);
+    });
+
+    it('should accrue simple interest for active deposits', async () => {
+        const deposits = [
+            {
+                deposit_id: 'fd-1',
+                principal_amount: '1000000',
+                interest_rate: '10',
+                interest_accrued: '0',
+                deposit_date: '2026-01-01',
+                maturity_date: '2027-01-01',
+                interest_calculation_method: 'simple',
+                calculation_basis: '365_days',
+            },
+        ];
+
+        const mockDb = createMockDb({ selectRows: deposits });
+        const service = new FixedDepositService(mockDb);
+
+        const result = await service.runDailyInterestAccrual(new Date('2026-03-01'));
+
+        expect(result.depositsProcessed).toBe(1);
+        // Daily simple: 1,000,000 * (10/100) / 365 ≈ 273.9726
+        expect(result.totalInterestAccrued.toNumber()).toBeCloseTo(273.9726, 2);
+    });
+
+    it('should accrue compound interest (on principal + accrued)', async () => {
+        const deposits = [
+            {
+                deposit_id: 'fd-1',
+                principal_amount: '1000000',
+                interest_rate: '10',
+                interest_accrued: '5000',
+                deposit_date: '2026-01-01',
+                maturity_date: '2027-01-01',
+                interest_calculation_method: 'compound',
+                calculation_basis: '365_days',
+            },
+        ];
+
+        const mockDb = createMockDb({ selectRows: deposits });
+        const service = new FixedDepositService(mockDb);
+
+        const result = await service.runDailyInterestAccrual(new Date('2026-03-01'));
+
+        expect(result.depositsProcessed).toBe(1);
+        // Compound: (1,000,000 + 5,000) * (10/100) / 365 ≈ 275.3425
+        expect(result.totalInterestAccrued.toNumber()).toBeCloseTo(275.3425, 2);
+    });
+
+    it('should use 360-day basis when configured', async () => {
+        const deposits = [
+            {
+                deposit_id: 'fd-1',
+                principal_amount: '1000000',
+                interest_rate: '10',
+                interest_accrued: '0',
+                deposit_date: '2026-01-01',
+                maturity_date: '2027-01-01',
+                interest_calculation_method: 'simple',
+                calculation_basis: '360_days',
+            },
+        ];
+
+        const mockDb = createMockDb({ selectRows: deposits });
+        const service = new FixedDepositService(mockDb);
+
+        const result = await service.runDailyInterestAccrual(new Date('2026-03-01'));
+
+        expect(result.depositsProcessed).toBe(1);
+        // 1,000,000 * (10/100) / 360 ≈ 277.7778
+        expect(result.totalInterestAccrued.toNumber()).toBeCloseTo(277.7778, 2);
+    });
+
+    it('should aggregate interest for multiple deposits', async () => {
+        const deposits = [
+            {
+                deposit_id: 'fd-1',
+                principal_amount: '500000',
+                interest_rate: '8',
+                interest_accrued: '0',
+                deposit_date: '2026-01-01',
+                maturity_date: '2027-01-01',
+                interest_calculation_method: 'simple',
+                calculation_basis: '365_days',
+            },
+            {
+                deposit_id: 'fd-2',
+                principal_amount: '1000000',
+                interest_rate: '12',
+                interest_accrued: '0',
+                deposit_date: '2026-01-01',
+                maturity_date: '2027-01-01',
+                interest_calculation_method: 'simple',
+                calculation_basis: '365_days',
+            },
+        ];
+
+        const mockDb = createMockDb({ selectRows: deposits });
+        const service = new FixedDepositService(mockDb);
+
+        const result = await service.runDailyInterestAccrual(new Date('2026-03-01'));
+
+        expect(result.depositsProcessed).toBe(2);
+        // fd-1: 500,000 * 8% / 365 ≈ 109.5890
+        // fd-2: 1,000,000 * 12% / 365 ≈ 328.7671
+        // total ≈ 438.3562
+        expect(result.totalInterestAccrued.toNumber()).toBeCloseTo(438.3562, 2);
+    });
+});
+
+// ────────────────────────────────────────────────────────────
+// calculatePrematureWithdrawal — via mock DB
+// ────────────────────────────────────────────────────────────
+
+describe('FixedDepositService - calculatePrematureWithdrawal', () => {
+    it('should throw when deposit not found', async () => {
+        const mockDb = createMockDb({ selectRows: [] });
+        const service = new FixedDepositService(mockDb);
+
+        await expect(
+            service.calculatePrematureWithdrawal('fd-999')
+        ).rejects.toThrow('Active fixed deposit fd-999 not found');
+    });
+
+    it('should throw when premature withdrawal is not allowed', async () => {
+        const fd = {
+            deposit_id: 'fd-1',
+            principal_amount: '1000000',
+            interest_accrued: '50000',
+            allows_premature_withdrawal: false,
+            premature_withdrawal_penalty_type: null,
+            premature_withdrawal_penalty: null,
+            withholding_tax_rate: '15',
+        };
+        const mockDb = createMockDb({ selectRows: [fd] });
+        const service = new FixedDepositService(mockDb);
+
+        await expect(
+            service.calculatePrematureWithdrawal('fd-1')
+        ).rejects.toThrow('does not allow premature withdrawal');
+    });
+
+    it('should calculate with percentage penalty', async () => {
+        const fd = {
+            deposit_id: 'fd-1',
+            principal_amount: '1000000',
+            interest_accrued: '50000',
+            allows_premature_withdrawal: true,
+            premature_withdrawal_penalty_type: 'percentage',
+            premature_withdrawal_penalty: '25',
+            withholding_tax_rate: '15',
+        };
+        const mockDb = createMockDb({ selectRows: [fd] });
+        const service = new FixedDepositService(mockDb);
+
+        const result = await service.calculatePrematureWithdrawal('fd-1');
+
+        expect(result.principalAmount.toNumber()).toBe(1000000);
+        expect(result.interestEarned.toNumber()).toBe(50000);
+        expect(result.penalty.toNumber()).toBe(12500);
+        expect(result.withholdingTax.toNumber()).toBe(5625);
+        expect(result.netPayout.toNumber()).toBe(1031875);
+    });
+
+    it('should calculate with fixed amount penalty', async () => {
+        const fd = {
+            deposit_id: 'fd-1',
+            principal_amount: '500000',
+            interest_accrued: '20000',
+            allows_premature_withdrawal: true,
+            premature_withdrawal_penalty_type: 'fixed_amount',
+            premature_withdrawal_penalty: '5000',
+            withholding_tax_rate: '10',
+        };
+        const mockDb = createMockDb({ selectRows: [fd] });
+        const service = new FixedDepositService(mockDb);
+
+        const result = await service.calculatePrematureWithdrawal('fd-1');
+
+        expect(result.penalty.toNumber()).toBe(5000);
+        expect(result.withholdingTax.toNumber()).toBe(1500);
+        expect(result.netPayout.toNumber()).toBe(513500);
+    });
+
+    it('should calculate with interest_reduction penalty', async () => {
+        const fd = {
+            deposit_id: 'fd-1',
+            principal_amount: '1000000',
+            interest_accrued: '100000',
+            allows_premature_withdrawal: true,
+            premature_withdrawal_penalty_type: 'interest_reduction',
+            premature_withdrawal_penalty: '50',
+            withholding_tax_rate: '0',
+        };
+        const mockDb = createMockDb({ selectRows: [fd] });
+        const service = new FixedDepositService(mockDb);
+
+        const result = await service.calculatePrematureWithdrawal('fd-1');
+
+        expect(result.penalty.toNumber()).toBe(50000);
+        expect(result.withholdingTax.toNumber()).toBe(0);
+        expect(result.netPayout.toNumber()).toBe(1050000);
+    });
+
+    it('should handle zero penalty and zero WHT', async () => {
+        const fd = {
+            deposit_id: 'fd-1',
+            principal_amount: '200000',
+            interest_accrued: '10000',
+            allows_premature_withdrawal: true,
+            premature_withdrawal_penalty_type: 'percentage',
+            premature_withdrawal_penalty: '0',
+            withholding_tax_rate: '0',
+        };
+        const mockDb = createMockDb({ selectRows: [fd] });
+        const service = new FixedDepositService(mockDb);
+
+        const result = await service.calculatePrematureWithdrawal('fd-1');
+
+        expect(result.penalty.toNumber()).toBe(0);
+        expect(result.withholdingTax.toNumber()).toBe(0);
+        expect(result.netPayout.toNumber()).toBe(210000);
+    });
+});
+
+// ────────────────────────────────────────────────────────────
+// processPrematureWithdrawal — via mock DB
+// ────────────────────────────────────────────────────────────
+
+describe('FixedDepositService - processPrematureWithdrawal', () => {
+    it('should close FD and return withdrawal result', async () => {
+        const fd = {
+            deposit_id: 'fd-1',
+            principal_amount: '500000',
+            interest_accrued: '20000',
+            allows_premature_withdrawal: true,
+            premature_withdrawal_penalty_type: 'percentage',
+            premature_withdrawal_penalty: '10',
+            withholding_tax_rate: '15',
+        };
+        const mockDb = createMockDb({ selectRows: [fd] });
+        const service = new FixedDepositService(mockDb);
+
+        const result = await service.processPrematureWithdrawal('fd-1', 'staff-1');
+
+        expect(result.principalAmount.toNumber()).toBe(500000);
+        expect(result.penalty.toNumber()).toBe(2000);
+        expect(mockDb.updateTable).toHaveBeenCalled();
+    });
+});
+
+// ────────────────────────────────────────────────────────────
+// Auto-rollover logic tests (pure calculations)
+// ────────────────────────────────────────────────────────────
+
+describe('FixedDepositService - Rollover Calculations', () => {
+    it('should calculate principal_plus_interest rollover correctly', () => {
+        const principal = new Decimal('1000000');
+        const accruedInterest = new Decimal('50000');
+        const whtRate = new Decimal('15');
+        const wht = accruedInterest.mul(whtRate).div(100);
+        const netInterest = accruedInterest.minus(wht);
+        const rolloverPrincipal = principal.plus(netInterest);
+
+        expect(wht.toNumber()).toBe(7500);
+        expect(netInterest.toNumber()).toBe(42500);
+        expect(rolloverPrincipal.toNumber()).toBe(1042500);
+    });
+
+    it('should calculate principal_only rollover correctly', () => {
+        const principal = new Decimal('1000000');
+        const rolloverPrincipal = principal; // principal_only keeps original amount
+
+        expect(rolloverPrincipal.toNumber()).toBe(1000000);
+    });
+
+    it('should handle zero interest rollover', () => {
+        const principal = new Decimal('500000');
+        const accruedInterest = new Decimal('0');
+        const whtRate = new Decimal('15');
+        const wht = accruedInterest.mul(whtRate).div(100);
+        const netInterest = accruedInterest.minus(wht);
+        const rolloverPrincipal = principal.plus(netInterest);
+
+        expect(wht.toNumber()).toBe(0);
+        expect(rolloverPrincipal.toNumber()).toBe(500000);
     });
 });

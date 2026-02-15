@@ -40,3 +40,5 @@ drizzle/meta/
 # Temporary files
 *.tmp
 *.swp
+# Coverage reports
+coverage/
