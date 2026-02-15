@@ -7,7 +7,7 @@ This document describes the comprehensive database migration structure for the I
 ## Migration Files Structure
 
 ### 001_authentication_and_authorization.sql
-**Purpose:** Foundational authentication, authorization, and access control
+**Purpose:** Foundational authentication, authorization, access control, and member credentials
 
 **Tables:**
 - `permissions` - System permissions for resources and actions
@@ -15,8 +15,9 @@ This document describes the comprehensive database migration structure for the I
 - `role_permissions` - Junction table mapping roles to permissions
 - `staff` - Staff member records with role assignments
 - `staff_credentials` - Secure password storage, 2FA, account status
+- `member_credentials` - Member PIN storage for self-service access
 
-**MVP Focus:** User authentication, basic RBAC, staff management
+**MVP Focus:** User authentication, basic RBAC, staff management, member self-service
 
 ---
 
@@ -42,8 +43,38 @@ This document describes the comprehensive database migration structure for the I
 
 ---
 
-### 003_savings_and_accounts.sql
-**Purpose:** Savings management, deposits, withdrawals, transfers, and interest accrual
+### 003_accounting.sql
+**Purpose:** Double-entry accounting system with comprehensive financial management
+
+**Tables:**
+- `financial_periods` - Fiscal period definition and status
+- `accounts` - Chart of accounts with hierarchy support
+- `transactions` - Double-entry journal entries
+- `manual_journal_entries` - Staff-created journal entries with approval workflow
+- `manual_journal_lines` - Line items for manual entries
+- `budgets` - Budget creation and tracking
+- `budget_lines` - Budget line items with actual vs. variance
+- `trial_balance` - Period-end trial balance calculation
+
+**MVP Focus:**
+- ACC-001 to ACC-009: Full double-entry accounting system
+- Chart of accounts configuration
+- Automatic transaction posting from member transactions
+- Manual journal entry workflow
+- Financial period management and year-end closing
+
+**Key Features:**
+- Hierarchical chart of accounts
+- Automatic posting of all member transactions (deposits, withdrawals, loans, etc.)
+- Manual entry workflow with approval levels
+- Budget management with variance tracking
+- Period locking to prevent post-close modifications
+- Trial balance preparation for financial statements
+
+---
+
+### 004_savings_and_accounts.sql
+**Purpose:** Savings management, deposits, withdrawals, transfers, interest accrual, and account features
 
 **Tables:**
 - `savings_products` - Configurable savings account products
@@ -52,22 +83,29 @@ This document describes the comprehensive database migration structure for the I
 - `withdrawals` - Withdrawal transaction tracking
 - `internal_transfers` - Transfers between member accounts
 - `interest_schedules` - Monthly interest accrual tracking
+- `beneficiaries` - Designated beneficiaries for account inheritance
+- `account_liens` - Account holds and liens (loan collateral, legal holds)
+- `standing_instructions` - Recurring automated transfers and payments
 
 **MVP Focus:**
 - SAV-001 to SAV-008: Core deposit/withdrawal functionality
 - Real-time balance updates
 - Interest calculation and posting
 - Multiple payment methods (cash, mobile money, bank transfer)
+- Account-level features and restrictions
 
 **Key Features:**
 - Configurable interest rates and frequencies
 - Support for minimum/maximum balance constraints
 - Overdraft configuration and management
 - Full audit trail for all transactions
+- Beneficiary designation and tracking
+- Lien placing and release workflow
+- Automated recurring transactions via standing instructions
 
 ---
 
-### 004_shares.sql
+### 005_shares.sql
 **Purpose:** Share capital management and dividend distribution
 
 **Tables:**
@@ -92,8 +130,8 @@ This document describes the comprehensive database migration structure for the I
 
 ---
 
-### 005_fixed_deposits.sql
-**Purpose:** Term deposit management with maturity tracking and interest computation
+### 006_fixed_deposits.sql
+**Purpose:** Term deposit management with maturity tracking, interest computation, and alerts
 
 **Tables:**
 - `fixed_deposit_products` - Configurable FD product templates
@@ -101,6 +139,7 @@ This document describes the comprehensive database migration structure for the I
 - `fd_interest_schedules` - Periodic interest accrual and payment
 - `fd_maturity_alerts` - Automated maturity notification tracking
 - `fd_rollovers` - Auto-rollover configuration and history
+- `maturity_alerts` - Centralized maturity alerts for FDs and loans
 
 **MVP Focus:**
 - FD-001 to FD-008: Core FD product and account management
@@ -115,11 +154,12 @@ This document describes the comprehensive database migration structure for the I
 - Auto-rollover with multiple rollover type options
 - Withholding tax on interest
 - Digital FD certificate generation
+- Centralized maturity alerting system
 
 ---
 
-### 006_loans.sql
-**Purpose:** Complete loan lifecycle from application through repayment and recovery
+### 007_loans.sql
+**Purpose:** Complete loan lifecycle from application through repayment, recovery, and reminders
 
 **Tables:**
 - `loan_products` - Loan product configuration
@@ -130,6 +170,7 @@ This document describes the comprehensive database migration structure for the I
 - `loan_schedules` - Repayment schedule generation
 - `loan_repayments` - Repayment transaction recording
 - `loan_recovery_actions` - Recovery workflow tracking
+- `loan_repayment_reminders` - Automated repayment reminders and notifications
 
 **MVP Focus:**
 - LON-001 to LON-030: Comprehensive loan management from credit to recovery
@@ -137,6 +178,7 @@ This document describes the comprehensive database migration structure for the I
 - Disbursement management
 - Automatic repayment schedule generation
 - Default and recovery tracking
+- Automated reminders for upcoming and overdue payments
 
 **Key Features:**
 - Multiple approval levels and credit committee workflows
@@ -146,36 +188,7 @@ This document describes the comprehensive database migration structure for the I
 - Automatic late payment penalties
 - Recovery action workflow (reminder → warning → legal)
 - Default and write-off tracking
-
----
-
-### 007_accounting.sql
-**Purpose:** Double-entry accounting system with comprehensive financial management
-
-**Tables:**
-- `financial_periods` - Fiscal period definition and status
-- `accounts` - Chart of accounts with hierarchy support
-- `transactions` - Double-entry journal entries
-- `manual_journal_entries` - Staff-created journal entries with approval workflow
-- `manual_journal_lines` - Line items for manual entries
-- `budgets` - Budget creation and tracking
-- `budget_lines` - Budget line items with actual vs. var iance
-- `trial_balance` - Period-end trial balance calculation
-
-**MVP Focus:**
-- ACC-001 to ACC-009: Full double-entry accounting system
-- Chart of accounts configuration
-- Automatic transaction posting from member transactions
-- Manual journal entry workflow
-- Financial period management and year-end closing
-
-**Key Features:**
-- Hierarchical chart of accounts
-- Automatic posting of all member transactions (deposits, withdrawals, loans, etc.)
-- Manual entry workflow with approval levels
-- Budget management with variance tracking
-- Period locking to prevent post-close modifications
-- Trial balance preparation for financial statements
+- Configurable reminder notifications (pre-due and post-due)
 
 ---
 
@@ -189,8 +202,6 @@ This document describes the comprehensive database migration structure for the I
 - `bulk_campaigns` - Bulk messaging campaign management
 - `campaign_messages` - Campaign message tracking
 - `communication_preferences` - Member opt-out preferences
-- `loan_repayment_reminders` - Automated repayment reminders
-- `maturity_alerts` - FD and loan maturity notifications
 
 **MVP Focus:**
 - MSG-001 to MSG-009: Automated notifications across channels
@@ -207,12 +218,11 @@ This document describes the comprehensive database migration structure for the I
 - Bulk campaign management with recipient filtering
 - Member communication preference management
 - Quiet hours respect
-- Automated reminders (loan repayment, FD maturity)
 
 ---
 
 ### 009_audit_and_security.sql
-**Purpose:** Comprehensive audit trails and security event tracking
+**Purpose:** Comprehensive audit trails, security event tracking, and configuration management
 
 **Tables:**
 - `audit_log` - Detailed change audit trail
@@ -224,6 +234,7 @@ This document describes the comprehensive database migration structure for the I
 - `reconciliation_audit` - Bank/account reconciliation tracking
 - `unmatched_reconciliation_items` - Unresolved reconciliation items
 - `api_access_log` - API request logging
+- `configuration_audit_log` - Configuration change tracking
 
 **MVP Focus:**
 - AUD-001 onwards: Comprehensive audit trail
@@ -231,6 +242,7 @@ This document describes the comprehensive database migration structure for the I
 - Security event tracking
 - Reconciliation documentation
 - Data export audit
+- Configuration change tracking
 
 **Key Features:**
 - Complete change audit trail (who, what, when, before/after values)
@@ -241,11 +253,12 @@ This document describes the comprehensive database migration structure for the I
 - Permission change audit trail
 - Bank reconciliation tracking with unmatched item resolution
 - API access logging for integration monitoring
+- Configuration change audit for compliance
 
 ---
 
 ### 010_system_administration.sql
-**Purpose:** SACCO configuration, settings, and operational management
+**Purpose:** SACCO configuration, settings, operational management, and fee/limit controls
 
 **Tables:**
 - `sacco_configuration` - Organization-wide settings
@@ -255,11 +268,12 @@ This document describes the comprehensive database migration structure for the I
 - `sms_gateways` - SMS provider configuration (Africa's Talking, Twilio)
 - `mobile_money_configuration` - Mobile money provider setup
 - `notification_settings` - Notification type configuration
-- `configuration_audit_log` - Configuration change tracking
 - `interest_rate_configuration` - Interest rate setup
 - `penalty_configuration` - Penalty structure setup
 - `scheduled_tasks` - Background job management (cron tasks)
 - `scheduled_task_logs` - Job execution history
+- `fee_schedules` - Transaction fee configuration and management
+- `transaction_limits` - Role and channel-based transaction limits
 
 **MVP Focus:**
 - ADM-001 to ADM-010: SACCO configuration and administration
@@ -267,6 +281,7 @@ This document describes the comprehensive database migration structure for the I
 - Feature flag management
 - Integration configuration
 - System settings
+- Fee and transaction limit management
 
 **Key Features:**
 - Comprehensive SACCO organization settings
@@ -275,8 +290,30 @@ This document describes the comprehensive database migration structure for the I
 - Feature flags for MVP modules
 - Interest rate and penalty configuration
 - Scheduled task management (interest accrual, statement generation, backups)
-- Configuration audit trail
 - Rate limiting and failover configuration for integrations
+- Flexible fee schedule management by transaction type and member category
+- Role-based and channel-based transaction limits with approval thresholds
+
+---
+
+### 011_row_level_security.sql
+**Purpose:** Defence-in-depth tenant isolation using PostgreSQL Row Level Security policies
+
+**Tables Modified:**
+- All major tables have RLS policies applied
+- Enforces app.current_tenant context variable
+- Prevents cross-tenant data access at database level
+
+**MVP Focus:**
+- SEC-002: Prevent cross-tenant data access
+- Multi-tenancy enforcement
+- Additional isolation layer beyond schema separation
+
+**Key Features:**
+- RLS policies on high-risk tables (members, accounts, transactions, audit_log, etc.)
+- Context-based access control via session variables
+- Session-level tenant enforcement
+- Graceful bypass for admin operations
 
 ---
 
@@ -285,11 +322,11 @@ This document describes the comprehensive database migration structure for the I
 | SRS Module | Primary Migration | Supporting Migrations |
 |---|---|---|
 | Member Management | 002 | 001, 009 |
-| Savings & Withdrawals | 003 | 007, 008, 009 |
-| Shares | 004 | 007, 008, 009 |
-| Fixed Deposits | 005 | 007, 008, 009 |
-| Loan Management | 006 | 007, 008, 009 |
-| Accounting & Financial | 007 | 009, 010 |
+| Savings & Withdrawals | 004 | 003, 008, 009 |
+| Shares | 005 | 003, 008, 009 |
+| Fixed Deposits | 006 | 003, 008, 009 |
+| Loan Management | 007 | 003, 008, 009 |
+| Accounting & Financial | 003 | 009, 010 |
 | Messaging Centre | 008 | 010 |
 | Security & Audit | 009 | 001 |
 | System Administration | 010 | All |
@@ -311,19 +348,21 @@ Every modification is tracked with:
 ### 3. **Referential Integrity**
 Foreign keys enforce data relationships and prevent orphaned records. Appropriate CASCADE/RESTRICT policies protect critical data.
 
-### 4. **Separation of Concerns**
-- Authentication/Authorization (001)
-- Member Management (002)
-- Financial Operations (003-007)
-- Communication (008)
-- Security & Compliance (009)
-- Administration (010)
+### 4. **Logical Domain Separation**
+Migrations are organized by functional domain:
+- **Authentication** (001) - User and access control
+- **Member data** (002) - Member lifecycle
+- **Financial core** (003-007) - Accounting, savings, investments, credit
+- **Communication** (008) - Notifications and messaging
+- **Security & Compliance** (009) - Audit and monitoring
+- **Administration** (010) - Configuration and operations
+- **Multi-tenancy** (011) - Isolation enforcement
 
 ### 5. **Flexible Configuration**
-Products, rates, penalties, and settings are configurable at the system level, supporting different SACCO policies without code changes.
+Products, rates, fees, penalties, and limits are configurable at the system level, supporting different SACCO policies without code changes.
 
 ### 6. **Multi-Tenancy Ready**
-All tables use the `template` schema prefix, ready for multi-tenant deployment with separate schemas per tenant.
+All tables use the `template` schema prefix, ready for multi-tenant deployment with separate schemas per tenant and RLS enforcement.
 
 ---
 
@@ -332,14 +371,14 @@ All tables use the `template` schema prefix, ready for multi-tenant deployment w
 ### Must-Have Requirements Addressed:
 
 ✅ **Member Management** - Complete registration, KYC, document verification  
-✅ **Savings Accounts** - Multiple products, deposits, withdrawals, interest accrual  
+✅ **Savings Accounts** - Multiple products, deposits, withdrawals, interest accrual, beneficiaries  
 ✅ **Shares** - Share classes, holdings, dividends, certificates  
 ✅ **Fixed Deposits** - Term deposits, maturity alerts, auto-rollover  
-✅ **Loans** - Full credit lifecycle, appraisal, approval, repayment  
+✅ **Loans** - Full credit lifecycle, appraisal, approval, repayment, reminders  
 ✅ **Accounting** - Double-entry system, GL, financial periods  
 ✅ **Messaging** - Automated SMS/email notifications, campaigns  
-✅ **Security** - Authentication, RBAC, audit trails  
-✅ **Administration** - Configuration, settings, provider management  
+✅ **Security** - Authentication, RBAC, audit trails, multi-tenancy  
+✅ **Administration** - Configuration, settings, provider management, fees, limits  
 
 ---
 
@@ -350,20 +389,21 @@ Migrations should be executed in numerical order:
 ```bash
 001_authentication_and_authorization.sql
 002_member_management.sql
-003_savings_and_accounts.sql
-004_shares.sql
-005_fixed_deposits.sql
-006_loans.sql
-007_accounting.sql
+003_accounting.sql
+004_savings_and_accounts.sql
+005_shares.sql
+006_fixed_deposits.sql
+007_loans.sql
 008_messaging.sql
 009_audit_and_security.sql
 010_system_administration.sql
+011_row_level_security.sql
 ```
 
 Each migration is independent for the most part, but they follow a logical dependency order:
 1. Foundation (001)
-2. Entities (002-006)
-3. Cross-cutting concerns (007-010)
+2. Entities (002-007)
+3. Cross-cutting concerns (008-011)
 
 ---
 
@@ -373,6 +413,21 @@ Each migration is independent for the most part, but they follow a logical depen
 - **Partitioning**: Audit logs and activity logs should be partitioned by date for large deployments
 - **Archive Strategy**: Old transaction records can be archived while maintaining audit trail
 - **Materialized Views**: Trial balance can be materialized daily for reporting efficiency
+
+---
+
+## Organization Changes (Latest)
+
+**Recent reorganization (Feb 2026):**
+- Moved `member_credentials` from 012 → 001 (authentication domain)
+- Moved account features (`beneficiaries`, `account_liens`, `standing_instructions`) from 012 → 004 (savings domain)
+- Moved `maturity_alerts` from 008 → 006 (fixed deposit domain)
+- Moved `loan_repayment_reminders` from 008 → 007 (loans domain)
+- Moved `configuration_audit_log` from 010 → 009 (audit domain)
+- Moved `fee_schedules` and `transaction_limits` from 012 → 010 (system administration)
+- Deleted 012_additional_features.sql (now empty)
+
+This reorganization improves logical grouping and reduces file clutter while maintaining all functionality.
 
 ---
 
