@@ -526,7 +526,6 @@ export class JobScheduler {
                 .selectFrom('tenants')
                 .select(['id', 'schema_name', 'sacco_name'])
                 .where('status', '=', 'active')
-                .where('is_active', '=', true as any)
                 .execute();
 
             for (const tenant of tenants) {
