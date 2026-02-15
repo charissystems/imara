@@ -38,3 +38,4 @@ export {
 // Optional Middleware
 export { corsMiddleware } from './cors';
 export { validate, getValidatedData, commonSchemas } from './validation';
+export { cacheInvalidation } from './cacheInvalidation';

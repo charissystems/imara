@@ -5,22 +5,33 @@ import { publicDb } from '../config/database';
 import { NotFoundError, ForbiddenError } from './errorHandler';
 import { appLogger } from './logger';
 import { Tenant } from '../database/types';
+import { globalCacheGet, globalCacheSet, globalCacheInvalidate } from '../services/cacheService';
 
 /**
- * Cache for tenant lookups to reduce database queries
+ * In-memory fallback cache for when Redis is unavailable
  */
-const tenantCache = new Map<string, { tenant: Tenant; timestamp: number }>();
-const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const tenantFallbackCache = new Map<string, { tenant: Tenant; timestamp: number }>();
+const FALLBACK_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+const REDIS_TENANT_TTL = 300; // 5 minutes in Redis
 
 /**
- * Get tenant from cache or database
+ * Get tenant from Redis cache (primary) or in-memory fallback, then database
  */
 async function getTenantBySubdomain(subdomain: string): Promise<Tenant | undefined> {
-    // Check cache first
-    const cached = tenantCache.get(subdomain);
-    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
-        appLogger.debug('Tenant cache hit', { subdomain });
-        return cached.tenant;
+    const cacheKey = `tenant:${subdomain}`;
+
+    // Try Redis first
+    const redisCached = await globalCacheGet<Tenant>(cacheKey);
+    if (redisCached) {
+        appLogger.debug('Tenant Redis cache hit', { subdomain });
+        return redisCached;
+    }
+
+    // Fallback to in-memory if Redis returned null (may be unavailable)
+    const memoryCached = tenantFallbackCache.get(subdomain);
+    if (memoryCached && Date.now() - memoryCached.timestamp < FALLBACK_CACHE_TTL) {
+        appLogger.debug('Tenant memory cache hit', { subdomain });
+        return memoryCached.tenant;
     }
 
     // Fetch from database
@@ -31,9 +42,10 @@ async function getTenantBySubdomain(subdomain: string): Promise<Tenant | undefin
         .where('deleted_at', 'is', null)
         .executeTakeFirst();
 
-    // Update cache if found
+    // Update both caches if found
     if (tenant) {
-        tenantCache.set(subdomain, {
+        globalCacheSet(cacheKey, tenant, REDIS_TENANT_TTL).catch(() => {});
+        tenantFallbackCache.set(subdomain, {
             tenant,
             timestamp: Date.now(),
         });
@@ -161,10 +173,12 @@ export async function tenantResolver(c: Context<Env>, next: Next) {
  */
 export function clearTenantCache(subdomain?: string) {
     if (subdomain) {
-        tenantCache.delete(subdomain);
+        tenantFallbackCache.delete(subdomain);
+        globalCacheInvalidate(`tenant:${subdomain}`).catch(() => {});
         appLogger.info('Tenant cache cleared', { subdomain });
     } else {
-        tenantCache.clear();
+        tenantFallbackCache.clear();
+        // Note: full Redis flush of tenant keys is handled by CacheService.invalidateDomain
         appLogger.info('All tenant cache cleared');
     }
 }

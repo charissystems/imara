@@ -115,6 +115,10 @@ export type {
     ResetPasswordResult,
 } from './passwordResetService';
 
+// Cache Service
+export { CacheService, globalCacheGet, globalCacheSet, globalCacheInvalidate } from './cacheService';
+export type { CacheDomain } from './cacheService';
+
 // Fixed Deposit Service
 export { FixedDepositService } from './fixedDepositService';
 export type {
@@ -167,3 +171,18 @@ export type {
     ExportColumn,
     ExportOptions,
 } from './exportService';
+
+// Tenant Access Audit Service
+export {
+    logTenantSecurityEvent,
+    logToPublicAudit,
+    logToTenantSecurityEvents,
+    queryTenantSecurityEvents,
+    queryPublicAuditLog,
+} from './tenantAuditService';
+export type {
+    TenantAccessEvent,
+    TenantSecurityEventType,
+    SecuritySeverity,
+    SecurityEventFilter,
+} from './tenantAuditService';

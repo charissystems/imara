@@ -3,6 +3,7 @@ import {
     createApp, errorHandler, logger, 
     tenantResolver, schemaContext, corsMiddleware, 
     authMiddleware, requestContext, auditMiddleware,
+    cacheInvalidation,
 } from './middleware';
 import { dbManager } from './config/database';
 import superAdminRoutes from './routes/superAdmin'; // Platform Admin
@@ -49,6 +50,7 @@ app.use('*', tenantResolver);
 app.use('*', schemaContext);
 app.use('*', auditMiddleware);
 app.use('*', authMiddleware);
+app.use('*', cacheInvalidation);
 
 // Now 'c.get("db")' is connected to the specific tenant schema (e.g., tenant_sacco_1)
 // And 'c.get("auditLogger")' is ready for logging operations
