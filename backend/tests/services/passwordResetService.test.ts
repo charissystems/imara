@@ -15,8 +15,8 @@ const mockRedis = {
     exists: vi.fn().mockResolvedValue(0),
 };
 
-vi.mock('ioredis', () => ({
-    default: vi.fn().mockImplementation(() => mockRedis),
+vi.mock('../../src/config/redis', () => ({
+    getCacheRedis: () => mockRedis,
 }));
 
 // Mock NotificationService
@@ -80,7 +80,7 @@ describe('PasswordResetService', () => {
         vi.clearAllMocks();
         mockDb = createMockDb();
         process.env.JWT_SECRET = 'test-secret';
-        resetService = new PasswordResetService(mockDb, 'tenant_001', mockRedis as any);
+        resetService = new PasswordResetService(mockDb, 'tenant_001');
     });
 
     afterEach(() => {

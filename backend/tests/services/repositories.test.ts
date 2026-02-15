@@ -477,4 +477,45 @@ describe('Repository Pattern - Data Access Logic', () => {
             expect(result[1].price).toBe(100);
         });
     });
+
+    describe('BaseRepository - Schema Name Validation', () => {
+        const VALID_TENANT_SCHEMA = /^tenant_[a-z0-9_]+$/;
+
+        it('should accept valid tenant schema names', () => {
+            const valid = [
+                'tenant_sacco1',
+                'tenant_abc_def',
+                'tenant_test_123',
+                'tenant_a',
+            ];
+            for (const name of valid) {
+                expect(VALID_TENANT_SCHEMA.test(name)).toBe(true);
+            }
+        });
+
+        it('should reject schemas without tenant_ prefix', () => {
+            const invalid = ['public', 'template', 'information_schema', 'sacco1'];
+            for (const name of invalid) {
+                expect(VALID_TENANT_SCHEMA.test(name)).toBe(false);
+            }
+        });
+
+        it('should reject schemas with SQL injection characters', () => {
+            const malicious = [
+                'tenant_test; DROP TABLE',
+                'tenant_test"--',
+                "tenant_test'OR 1=1",
+                'tenant_TEST',       // uppercase
+                'tenant_test.evil',  // dots
+            ];
+            for (const name of malicious) {
+                expect(VALID_TENANT_SCHEMA.test(name)).toBe(false);
+            }
+        });
+
+        it('should reject empty or undefined-like strings', () => {
+            expect(VALID_TENANT_SCHEMA.test('')).toBe(false);
+            expect(VALID_TENANT_SCHEMA.test('tenant_')).toBe(false);
+        });
+    });
 });

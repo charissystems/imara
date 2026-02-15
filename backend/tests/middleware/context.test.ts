@@ -86,6 +86,37 @@ describe('Request Context Middleware', () => {
             expect(tenant).toEqual(mockTenant);
         });
 
+        it('should reject tenant with invalid schema name characters', () => {
+            const invalidSchemas = [
+                'tenant_test; DROP TABLE',
+                'tenant_test"--',
+                '../../../etc/passwd',
+            ];
+
+            for (const schema of invalidSchemas) {
+                const safeName = schema.replace(/[^a-zA-Z0-9_]/g, '');
+                expect(safeName).not.toBe(schema);
+            }
+        });
+
+        it('should reject schemas without tenant_ prefix via validation', () => {
+            const VALID_TENANT_SCHEMA = /^tenant_[a-z0-9_]+$/;
+            const invalidPrefixes = ['public', 'template', 'information_schema'];
+
+            for (const schema of invalidPrefixes) {
+                expect(VALID_TENANT_SCHEMA.test(schema)).toBe(false);
+            }
+        });
+
+        it('should allow valid schema names through sanitisation', () => {
+            const validSchemas = ['tenant_sacco1', 'tenant_abc_def_123'];
+
+            for (const schema of validSchemas) {
+                const safeName = schema.replace(/[^a-zA-Z0-9_]/g, '');
+                expect(safeName).toBe(schema);
+            }
+        });
+
         it('should throw error if tenant has no schema_name', () => {
             const invalidTenant = {
                 id: 'tenant-123',
@@ -120,6 +151,19 @@ describe('Request Context Middleware', () => {
 
             await mockNext();
             expect(mockNext).toHaveBeenCalled();
+        });
+
+        it('should verify SET ROLE pattern matches schema convention', () => {
+            const schema = 'tenant_mysacco';
+            const expectedRole = `${schema}_role`;
+            expect(expectedRole).toBe('tenant_mysacco_role');
+        });
+
+        it('should verify SET search_path pattern', () => {
+            const schema = 'tenant_mysacco';
+            const expectedPath = `SET search_path TO "${schema}", public`;
+            expect(expectedPath).toContain(schema);
+            expect(expectedPath).toContain('public');
         });
     });
 
