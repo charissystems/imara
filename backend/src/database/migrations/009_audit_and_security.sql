@@ -275,3 +275,21 @@ CREATE TABLE IF NOT EXISTS template.api_access_log (
 CREATE INDEX IF NOT EXISTS api_access_user_idx ON template.api_access_log(user_id);
 CREATE INDEX IF NOT EXISTS api_access_timestamp_idx ON template.api_access_log(request_timestamp);
 CREATE INDEX IF NOT EXISTS api_access_endpoint_idx ON template.api_access_log(endpoint);
+-- ACCESS LOGS FOR CONFIGURATION CHANGES
+CREATE TABLE IF NOT EXISTS template.configuration_audit_log (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    
+    configuration_type varchar(100) NOT NULL,
+    configuration_id uuid,
+    
+    change_type varchar(50) CHECK (change_type IN ('create', 'update', 'delete')) NOT NULL,
+    
+    old_values jsonb,
+    new_values jsonb,
+    
+    changed_by uuid REFERENCES template.staff(id) ON DELETE SET NULL,
+    change_timestamp timestamptz DEFAULT now() NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS config_audit_type_idx ON template.configuration_audit_log(configuration_type);
+CREATE INDEX IF NOT EXISTS config_audit_timestamp_idx ON template.configuration_audit_log(change_timestamp);

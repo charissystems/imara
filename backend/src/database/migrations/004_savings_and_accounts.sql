@@ -222,3 +222,74 @@ CREATE TABLE IF NOT EXISTS template.interest_schedules (
 
 CREATE INDEX IF NOT EXISTS interest_schedules_account_idx ON template.interest_schedules(savings_account_id);
 CREATE INDEX IF NOT EXISTS interest_schedules_period_idx ON template.interest_schedules(period_start, period_end);
+-- BENEFICIARIES
+CREATE TABLE IF NOT EXISTS template.beneficiaries (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    member_id uuid NOT NULL REFERENCES template.members(id) ON DELETE CASCADE,
+    account_id uuid REFERENCES template.savings_accounts(id) ON DELETE SET NULL,
+    full_name varchar(200) NOT NULL,
+    relationship varchar(100) NOT NULL,
+    phone varchar(20),
+    email varchar(200),
+    national_id varchar(50),
+    percentage_share numeric(5,2) NOT NULL DEFAULT 0 CHECK (percentage_share >= 0 AND percentage_share <= 100),
+    is_primary boolean NOT NULL DEFAULT false,
+    status varchar(20) CHECK (status IN ('active', 'inactive', 'removed')) NOT NULL DEFAULT 'active',
+    created_by uuid REFERENCES template.staff(id) ON DELETE SET NULL,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL,
+    deleted_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS beneficiaries_member_idx ON template.beneficiaries(member_id);
+CREATE INDEX IF NOT EXISTS beneficiaries_account_idx ON template.beneficiaries(account_id);
+CREATE INDEX IF NOT EXISTS beneficiaries_status_idx ON template.beneficiaries(status);
+
+-- ACCOUNT LIENS
+CREATE TABLE IF NOT EXISTS template.account_liens (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    account_id uuid NOT NULL REFERENCES template.savings_accounts(id) ON DELETE RESTRICT,
+    amount numeric(18,2) NOT NULL CHECK (amount > 0),
+    reason text NOT NULL,
+    lien_type varchar(50) CHECK (lien_type IN ('loan_collateral', 'legal_hold', 'manual')) NOT NULL DEFAULT 'manual',
+    placed_by uuid NOT NULL REFERENCES template.staff(id) ON DELETE RESTRICT,
+    placed_at timestamptz NOT NULL DEFAULT now(),
+    released_at timestamptz,
+    released_by uuid REFERENCES template.staff(id) ON DELETE SET NULL,
+    release_reason text,
+    related_loan_id uuid REFERENCES template.loan_accounts(id) ON DELETE SET NULL,
+    status varchar(20) CHECK (status IN ('active', 'released', 'expired')) NOT NULL DEFAULT 'active',
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS account_liens_account_idx ON template.account_liens(account_id);
+CREATE INDEX IF NOT EXISTS account_liens_status_idx ON template.account_liens(status);
+CREATE INDEX IF NOT EXISTS account_liens_loan_idx ON template.account_liens(related_loan_id);
+
+-- STANDING INSTRUCTIONS
+CREATE TABLE IF NOT EXISTS template.standing_instructions (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    member_id uuid NOT NULL REFERENCES template.members(id) ON DELETE CASCADE,
+    instruction_type varchar(50) CHECK (instruction_type IN ('savings_split', 'loan_repayment', 'transfer', 'share_purchase')) NOT NULL,
+    source_account_id uuid NOT NULL REFERENCES template.savings_accounts(id) ON DELETE RESTRICT,
+    destination_account_id uuid REFERENCES template.savings_accounts(id) ON DELETE SET NULL,
+    destination_external jsonb,
+    amount numeric(18,2) NOT NULL CHECK (amount > 0),
+    frequency varchar(20) CHECK (frequency IN ('daily', 'weekly', 'biweekly', 'monthly', 'quarterly', 'annually')) NOT NULL,
+    start_date date NOT NULL,
+    end_date date,
+    next_execution_date date NOT NULL,
+    last_execution_date date,
+    execution_count integer NOT NULL DEFAULT 0,
+    max_executions integer,
+    status varchar(20) CHECK (status IN ('active', 'paused', 'completed', 'cancelled')) NOT NULL DEFAULT 'active',
+    created_by uuid REFERENCES template.staff(id) ON DELETE SET NULL,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL,
+    deleted_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS standing_instructions_member_idx ON template.standing_instructions(member_id);
+CREATE INDEX IF NOT EXISTS standing_instructions_source_idx ON template.standing_instructions(source_account_id);
+CREATE INDEX IF NOT EXISTS standing_instructions_next_exec_idx ON template.standing_instructions(next_execution_date) WHERE status = 'active';

@@ -187,3 +187,34 @@ CREATE TABLE IF NOT EXISTS template.fd_rollovers (
 
 CREATE INDEX IF NOT EXISTS fd_rollovers_original_idx ON template.fd_rollovers(original_fd_id);
 CREATE INDEX IF NOT EXISTS fd_rollovers_new_idx ON template.fd_rollovers(new_fd_id);
+-- MATURITY ALERTS (For Fixed Deposits)
+CREATE TABLE IF NOT EXISTS template.maturity_alerts (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    
+    -- Association
+    alert_type varchar(50) CHECK (alert_type IN ('fixed_deposit', 'loan')) NOT NULL,
+    fixed_deposit_id uuid REFERENCES template.fixed_deposits(id) ON DELETE CASCADE,
+    loan_account_id uuid REFERENCES template.loan_accounts(id) ON DELETE CASCADE,
+    
+    member_id uuid NOT NULL REFERENCES template.members(id) ON DELETE CASCADE,
+    
+    -- Alert Configuration
+    days_before integer NOT NULL CHECK (days_before > 0),
+    alert_date date NOT NULL,
+    maturity_date date NOT NULL,
+    
+    -- Delivery Status
+    sent_to_member boolean DEFAULT false,
+    sent_to_staff boolean DEFAULT false,
+    sent_at timestamptz,
+    
+    -- Message
+    template_id uuid REFERENCES template.message_templates(id) ON DELETE SET NULL,
+    
+    is_active boolean DEFAULT true,
+    
+    created_at timestamptz DEFAULT now() NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS maturity_alerts_member_idx ON template.maturity_alerts(member_id);
+CREATE INDEX IF NOT EXISTS maturity_alerts_sent_idx ON template.maturity_alerts(sent_to_member);

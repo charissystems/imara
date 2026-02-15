@@ -338,3 +338,36 @@ CREATE TABLE IF NOT EXISTS template.loan_recovery_actions (
 
 CREATE INDEX IF NOT EXISTS loan_recovery_loan_idx ON template.loan_recovery_actions(loan_account_id);
 CREATE INDEX IF NOT EXISTS loan_recovery_status_idx ON template.loan_recovery_actions(status);
+-- LOAN REPAYMENT REMINDERS
+CREATE TABLE IF NOT EXISTS template.loan_repayment_reminders (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    
+    loan_account_id uuid NOT NULL REFERENCES template.loan_accounts(id) ON DELETE CASCADE,
+    schedule_id uuid REFERENCES template.loan_schedules(id) ON DELETE CASCADE,
+    
+    -- Reminder Configuration
+    days_before integer CHECK (days_before > 0), -- Reminder X days before due
+    days_after integer DEFAULT 0,                 -- or X days after due (for overdue reminders)
+    
+    reminder_date date NOT NULL,
+    
+    -- Message
+    template_id uuid REFERENCES template.message_templates(id) ON DELETE SET NULL,
+    custom_message text,
+    
+    -- Delivery Status
+    sent_to_member boolean DEFAULT false,
+    sent_to_staff boolean DEFAULT false,
+    last_sent_at timestamptz,
+    send_count integer DEFAULT 0,
+    
+    -- Configuration
+    is_active boolean DEFAULT true,
+    
+    -- Audit
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS loan_reminders_loan_idx ON template.loan_repayment_reminders(loan_account_id);
+CREATE INDEX IF NOT EXISTS loan_reminders_date_idx ON template.loan_repayment_reminders(reminder_date);

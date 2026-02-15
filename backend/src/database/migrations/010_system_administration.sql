@@ -240,25 +240,6 @@ CREATE TABLE IF NOT EXISTS template.notification_settings (
     updated_at timestamptz DEFAULT now() NOT NULL
 );
 
--- ACCESS LOGS FOR CONFIGURATION CHANGES
-CREATE TABLE IF NOT EXISTS template.configuration_audit_log (
-    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    
-    configuration_type varchar(100) NOT NULL,
-    configuration_id uuid,
-    
-    change_type varchar(50) CHECK (change_type IN ('create', 'update', 'delete')) NOT NULL,
-    
-    old_values jsonb,
-    new_values jsonb,
-    
-    changed_by uuid REFERENCES template.staff(id) ON DELETE SET NULL,
-    change_timestamp timestamptz DEFAULT now() NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS config_audit_type_idx ON template.configuration_audit_log(configuration_type);
-CREATE INDEX IF NOT EXISTS config_audit_timestamp_idx ON template.configuration_audit_log(change_timestamp);
-
 -- INTEREST RATE CONFIGURATION
 CREATE TABLE IF NOT EXISTS template.interest_rate_configuration (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -378,3 +359,60 @@ CREATE TABLE IF NOT EXISTS template.scheduled_task_logs (
 
 CREATE INDEX IF NOT EXISTS task_logs_task_idx ON template.scheduled_task_logs(task_id);
 CREATE INDEX IF NOT EXISTS task_logs_status_idx ON template.scheduled_task_logs(execution_status);
+-- FEE SCHEDULES
+CREATE TABLE IF NOT EXISTS template.fee_schedules (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    code varchar(20) NOT NULL UNIQUE,
+    name varchar(100) NOT NULL,
+    description text,
+    fee_type varchar(50) CHECK (fee_type IN ('registration', 'account_maintenance', 'withdrawal', 'loan_processing', 'late_payment', 'exit', 'transfer', 'statement', 'card_issuance', 'other')) NOT NULL,
+    amount numeric(18,2) NOT NULL DEFAULT 0,
+    calculation_method varchar(30) CHECK (calculation_method IN ('fixed', 'percentage', 'tiered')) NOT NULL DEFAULT 'fixed',
+    percentage_rate numeric(5,2),
+    minimum_fee numeric(18,2),
+    maximum_fee numeric(18,2),
+    applicable_to varchar(50) CHECK (applicable_to IN ('all_members', 'savings', 'loans', 'shares', 'fixed_deposits', 'transfers', 'withdrawals')) NOT NULL,
+    is_active boolean NOT NULL DEFAULT true,
+    effective_from date NOT NULL DEFAULT CURRENT_DATE,
+    effective_to date,
+    created_by uuid REFERENCES template.staff(id) ON DELETE SET NULL,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL,
+    deleted_at timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS fee_schedules_type_idx ON template.fee_schedules(fee_type);
+CREATE INDEX IF NOT EXISTS fee_schedules_active_idx ON template.fee_schedules(is_active) WHERE is_active = true;
+
+-- TRANSACTION LIMITS
+CREATE TABLE IF NOT EXISTS template.transaction_limits (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    role varchar(50) NOT NULL,
+    channel varchar(50) CHECK (channel IN ('teller', 'mobile', 'ussd', 'agent', 'portal', 'api')) NOT NULL,
+    transaction_type varchar(50) CHECK (transaction_type IN ('deposit', 'withdrawal', 'transfer', 'loan_disbursement', 'loan_repayment', 'share_purchase')) NOT NULL,
+    per_transaction_limit numeric(18,2) NOT NULL CHECK (per_transaction_limit > 0),
+    daily_limit numeric(18,2) NOT NULL CHECK (daily_limit > 0),
+    monthly_limit numeric(18,2),
+    requires_approval_above numeric(18,2),
+    is_active boolean NOT NULL DEFAULT true,
+    created_by uuid REFERENCES template.staff(id) ON DELETE SET NULL,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL,
+    deleted_at timestamptz,
+    UNIQUE(role, channel, transaction_type)
+);
+
+CREATE INDEX IF NOT EXISTS transaction_limits_role_idx ON template.transaction_limits(role);
+CREATE INDEX IF NOT EXISTS transaction_limits_channel_idx ON template.transaction_limits(channel);
+
+-- ============================================================================
+-- ROW LEVEL SECURITY POLICIES
+-- ============================================================================
+
+ALTER TABLE template.fee_schedules ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_rls_fee_schedules ON template.fee_schedules
+    FOR ALL USING (current_setting('app.current_tenant', true) IS NOT NULL);
+
+ALTER TABLE template.transaction_limits ENABLE ROW LEVEL SECURITY;
+CREATE POLICY tenant_rls_transaction_limits ON template.transaction_limits
+    FOR ALL USING (current_setting('app.current_tenant', true) IS NOT NULL);

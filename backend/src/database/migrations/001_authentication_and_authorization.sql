@@ -128,3 +128,21 @@ CREATE TABLE IF NOT EXISTS template.staff_credentials (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS staff_credentials_staff_idx ON template.staff_credentials(staff_id);
+-- MEMBER CREDENTIALS (PINs for member self-service)
+CREATE TABLE IF NOT EXISTS template.member_credentials (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    member_id uuid NOT NULL UNIQUE REFERENCES template.members(id) ON DELETE CASCADE,
+    pin_hash varchar(255) NOT NULL,
+    pin_salt varchar(100) NOT NULL,
+    pin_attempts integer NOT NULL DEFAULT 0,
+    max_attempts integer NOT NULL DEFAULT 5,
+    is_locked boolean NOT NULL DEFAULT false,
+    locked_at timestamptz,
+    last_pin_change timestamptz NOT NULL DEFAULT now(),
+    force_change boolean NOT NULL DEFAULT false,
+    created_by uuid REFERENCES template.staff(id) ON DELETE SET NULL,
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS member_credentials_member_idx ON template.member_credentials(member_id);
