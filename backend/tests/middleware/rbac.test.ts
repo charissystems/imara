@@ -76,8 +76,69 @@ describe('hasPermission', () => {
             expect(hasPermission(UserRole.SACCO_ADMIN, 'reports', 'export')).toBe(true);
         });
 
-        it('should deny audit log access', () => {
-            expect(hasPermission(UserRole.SACCO_ADMIN, 'audit_logs', 'read')).toBe(false);
+        it('should grant audit log read access', () => {
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'audit_logs', 'read')).toBe(true);
+        });
+
+        it('should grant messaging full access', () => {
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'messaging', 'create')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'messaging', 'read')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'messaging', 'update')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'messaging', 'delete')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'messaging', 'approve')).toBe(true);
+        });
+
+        it('should grant beneficiary management', () => {
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'beneficiaries', 'create')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'beneficiaries', 'read')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'beneficiaries', 'update')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'beneficiaries', 'delete')).toBe(true);
+        });
+
+        it('should grant standing instruction management', () => {
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'standing_instructions', 'create')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'standing_instructions', 'read')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'standing_instructions', 'update')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'standing_instructions', 'delete')).toBe(true);
+        });
+
+        it('should grant account lien management', () => {
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'account_liens', 'create')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'account_liens', 'read')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'account_liens', 'update')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'account_liens', 'delete')).toBe(true);
+        });
+
+        it('should grant member credential management', () => {
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'member_credentials', 'create')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'member_credentials', 'read')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'member_credentials', 'update')).toBe(true);
+        });
+
+        it('should grant configuration management', () => {
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'configuration', 'create')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'configuration', 'read')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'configuration', 'update')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'configuration', 'delete')).toBe(true);
+        });
+
+        it('should grant fee schedule management', () => {
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'fee_schedules', 'create')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'fee_schedules', 'read')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'fee_schedules', 'update')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'fee_schedules', 'delete')).toBe(true);
+        });
+
+        it('should grant transaction limit management', () => {
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'transaction_limits', 'create')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'transaction_limits', 'read')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'transaction_limits', 'update')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'transaction_limits', 'delete')).toBe(true);
+        });
+
+        it('should grant transaction update and approve for reversals', () => {
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'transactions', 'update')).toBe(true);
+            expect(hasPermission(UserRole.SACCO_ADMIN, 'transactions', 'approve')).toBe(true);
         });
     });
 
@@ -107,6 +168,29 @@ describe('hasPermission', () => {
             expect(hasPermission(UserRole.TELLER, 'loans', 'create')).toBe(false);
             expect(hasPermission(UserRole.TELLER, 'loans', 'approve')).toBe(false);
         });
+
+        it('should grant messaging create and read', () => {
+            expect(hasPermission(UserRole.TELLER, 'messaging', 'create')).toBe(true);
+            expect(hasPermission(UserRole.TELLER, 'messaging', 'read')).toBe(true);
+            expect(hasPermission(UserRole.TELLER, 'messaging', 'delete')).toBe(false);
+        });
+
+        it('should grant beneficiary create and read', () => {
+            expect(hasPermission(UserRole.TELLER, 'beneficiaries', 'create')).toBe(true);
+            expect(hasPermission(UserRole.TELLER, 'beneficiaries', 'read')).toBe(true);
+            expect(hasPermission(UserRole.TELLER, 'beneficiaries', 'delete')).toBe(false);
+        });
+
+        it('should grant standing instruction create and read', () => {
+            expect(hasPermission(UserRole.TELLER, 'standing_instructions', 'create')).toBe(true);
+            expect(hasPermission(UserRole.TELLER, 'standing_instructions', 'read')).toBe(true);
+            expect(hasPermission(UserRole.TELLER, 'standing_instructions', 'delete')).toBe(false);
+        });
+
+        it('should grant account lien read only', () => {
+            expect(hasPermission(UserRole.TELLER, 'account_liens', 'read')).toBe(true);
+            expect(hasPermission(UserRole.TELLER, 'account_liens', 'create')).toBe(false);
+        });
     });
 
     // ── Loan Officer ─────────────────────────────────────────
@@ -133,6 +217,11 @@ describe('hasPermission', () => {
         it('should deny member management', () => {
             expect(hasPermission(UserRole.LOAN_OFFICER, 'members', 'create')).toBe(false);
             expect(hasPermission(UserRole.LOAN_OFFICER, 'members', 'update')).toBe(false);
+        });
+
+        it('should grant account lien create and read for loan collateral', () => {
+            expect(hasPermission(UserRole.LOAN_OFFICER, 'account_liens', 'create')).toBe(true);
+            expect(hasPermission(UserRole.LOAN_OFFICER, 'account_liens', 'read')).toBe(true);
         });
     });
 
@@ -195,6 +284,21 @@ describe('hasPermission', () => {
             expect(hasPermission(UserRole.AUDITOR, 'loans', 'create')).toBe(false);
             expect(hasPermission(UserRole.AUDITOR, 'loans', 'approve')).toBe(false);
         });
+
+        it('should grant read-only access to new resources', () => {
+            expect(hasPermission(UserRole.AUDITOR, 'messaging', 'read')).toBe(true);
+            expect(hasPermission(UserRole.AUDITOR, 'beneficiaries', 'read')).toBe(true);
+            expect(hasPermission(UserRole.AUDITOR, 'account_liens', 'read')).toBe(true);
+            expect(hasPermission(UserRole.AUDITOR, 'fee_schedules', 'read')).toBe(true);
+            expect(hasPermission(UserRole.AUDITOR, 'transaction_limits', 'read')).toBe(true);
+            expect(hasPermission(UserRole.AUDITOR, 'configuration', 'read')).toBe(true);
+        });
+
+        it('should deny write access to new resources', () => {
+            expect(hasPermission(UserRole.AUDITOR, 'messaging', 'create')).toBe(false);
+            expect(hasPermission(UserRole.AUDITOR, 'beneficiaries', 'create')).toBe(false);
+            expect(hasPermission(UserRole.AUDITOR, 'configuration', 'update')).toBe(false);
+        });
     });
 
     // ── Member (Self-Service) ────────────────────────────────
@@ -221,6 +325,22 @@ describe('hasPermission', () => {
             expect(hasPermission(UserRole.MEMBER, 'loans', 'approve')).toBe(false);
             expect(hasPermission(UserRole.MEMBER, 'members', 'create')).toBe(false);
             expect(hasPermission(UserRole.MEMBER, 'staff', 'create')).toBe(false);
+        });
+
+        it('should grant read access to own beneficiaries and standing instructions', () => {
+            expect(hasPermission(UserRole.MEMBER, 'beneficiaries', 'read')).toBe(true);
+            expect(hasPermission(UserRole.MEMBER, 'standing_instructions', 'read')).toBe(true);
+        });
+
+        it('should deny write access to beneficiaries and standing instructions', () => {
+            expect(hasPermission(UserRole.MEMBER, 'beneficiaries', 'create')).toBe(false);
+            expect(hasPermission(UserRole.MEMBER, 'standing_instructions', 'create')).toBe(false);
+        });
+
+        it('should deny access to messaging and admin resources', () => {
+            expect(hasPermission(UserRole.MEMBER, 'messaging', 'create')).toBe(false);
+            expect(hasPermission(UserRole.MEMBER, 'configuration', 'read')).toBe(false);
+            expect(hasPermission(UserRole.MEMBER, 'fee_schedules', 'read')).toBe(false);
         });
     });
 
@@ -428,6 +548,26 @@ describe('enforceAllPermissions', () => {
             { resource: 'loans', action: 'approve' }, // Teller doesn't have this
         ]);
         await expect(middleware(ctx as any, mockNext)).rejects.toThrow('Permission denied');
+    });
+
+    it('should allow SACCO_ADMIN for reversal (transactions:update + audit_logs:create)', async () => {
+        const ctx = createMockContext({ id: 'u1', role: UserRole.SACCO_ADMIN });
+        const middleware = enforceAllPermissions([
+            { resource: 'transactions', action: 'update' },
+            { resource: 'audit_logs', action: 'create' },
+        ]);
+        // SACCO_ADMIN doesn't have audit_logs:create, only audit_logs:read
+        await expect(middleware(ctx as any, mockNext)).rejects.toThrow('Permission denied');
+    });
+
+    it('should allow SYSTEM_ADMIN for any combined permissions', async () => {
+        const ctx = createMockContext({ id: 'u1', role: UserRole.SYSTEM_ADMIN });
+        const middleware = enforceAllPermissions([
+            { resource: 'transactions', action: 'update' },
+            { resource: 'audit_logs', action: 'create' },
+        ]);
+        await middleware(ctx as any, mockNext);
+        expect(mockNext).toHaveBeenCalled();
     });
 
     it('should include AND in error message', async () => {
