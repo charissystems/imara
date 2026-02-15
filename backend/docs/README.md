@@ -5,8 +5,14 @@ Comprehensive documentation for the Imara SACCO Management System backend.
 ## Structure
 
 ### 📁 `/api`
-API endpoint documentation and testing guides.
-- **ENDPOINTS.md** - Complete API endpoint reference with curl examples and response formats
+Comprehensive API documentation with guides, examples, and interactive specs.
+- **README.md** - API documentation hub and quick reference
+- **getting-started.md** - Getting started guide, authentication basics, common patterns
+- **authentication.md** - Detailed authentication, authorization, roles, security
+- **error-handling.md** - Error codes, debugging, solutions
+- **openapi.yaml** - Complete OpenAPI specification
+- **domains/** - Domain-specific API documentation (auth, members, accounts, loans, etc.)
+- **guides/** - Workflow guides and pagination/filtering examples
 
 ### 📁 `/database`
 Database schema and migration documentation.
@@ -24,7 +30,10 @@ Visual documentation and diagrams.
 
 ## Quick Links
 
-- **Getting Started**: See [API ENDPOINTS](./api/ENDPOINTS.md) to test the API
+- **API Documentation**: Start with [API README](./api/README.md) or [Getting Started](./api/getting-started.md)
+- **API Endpoints**: Browse [domain-specific endpoints](./api/domains/) or see [OpenAPI spec](./api/openapi.yaml)
+- **Workflows**: See [complete examples](./api/guides/workflows.md)
+- **Error Handling**: Review [error codes and solutions](./api/error-handling.md)
 - **Database Setup**: Refer to [MIGRATION GUIDE](./database/MIGRATION_GUIDE.md)
 - **System Architecture**: Review [MULTITENANCY ENHANCEMENTS](./architecture/MULTITENANCY_ENHANCEMENTS.md)
 - **Visual Diagrams**: Check `/diagrams` for visual references
@@ -52,11 +61,20 @@ Visual documentation and diagrams.
 ## Navigation
 
 For developers:
-1. Start with [API ENDPOINTS](./api/ENDPOINTS.md) to understand available endpoints
-2. Review [MIGRATION GUIDE](./database/MIGRATION_GUIDE.md) for database structure
-3. Check [MULTITENANCY ENHANCEMENTS](./architecture/MULTITENANCY_ENHANCEMENTS.md) for system design
+1. Start with [API Getting Started](./api/getting-started.md) to understand the API
+2. Browse [domain-specific endpoints](./api/domains/) for your use case
+3. Review [complete workflow examples](./api/guides/workflows.md) for your scenario
+4. Check [database migration guide](./database/MIGRATION_GUIDE.md) for data structure
+5. Reference [error handling guide](./api/error-handling.md) for debugging
+
+For API integrators:
+1. Review [API README](./api/README.md) for overview
+2. Check [authentication guide](./api/authentication.md)
+3. See [pagination & filtering guide](./api/guides/pagination-filtering.md) for list endpoints
+4. Browse [domain API documentation](./api/domains/) for specific endpoints
+5. Test with [OpenAPI spec](./api/openapi.yaml) or cURL examples
 
 For administrators:
-1. Review [MULTITENANCY ENHANCEMENTS](./architecture/MULTITENANCY_ENHANCEMENTS.md) for operational details
-2. Check [MIGRATION GUIDE](./database/MIGRATION_GUIDE.md) for maintenance procedures
-3. Reference `/diagrams` for visual system overview
+1. Review [MULTITENANCY ENHANCEMENTS](./architecture/MULTITENANCY_ENHANCEMENTS.md) for operations
+2. Check [MIGRATION GUIDE](./database/MIGRATION_GUIDE.md) for maintenance
+3. Reference `/architecture` and `/diagrams` for system overview
