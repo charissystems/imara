@@ -113,6 +113,16 @@ import {
     ScheduledTaskLogsTable,
 } from './admin';
 
+// Additional Features
+import {
+    BeneficiariesTable,
+    AccountLiensTable,
+    StandingInstructionsTable,
+    MemberCredentialsTable,
+    FeeSchedulesTable,
+    TransactionLimitsTable,
+} from './additional';
+
 /*
  * HELPER TYPES (CRUD GENERICS)
  * Selectable, Insertable, and Updateable types generated for use in Repositories and Services
@@ -324,3 +334,23 @@ export type NewScheduledTask = Insertable<ScheduledTasksTable>;
 export type ScheduledTaskUpdate = Updateable<ScheduledTasksTable>;
 export type ScheduledTaskLog = Selectable<ScheduledTaskLogsTable>;
 export type NewScheduledTaskLog = Insertable<ScheduledTaskLogsTable>;
+
+// Additional Features (012)
+export type Beneficiary = Selectable<BeneficiariesTable>;
+export type NewBeneficiary = Insertable<BeneficiariesTable>;
+export type BeneficiaryUpdate = Updateable<BeneficiariesTable>;
+export type AccountLien = Selectable<AccountLiensTable>;
+export type NewAccountLien = Insertable<AccountLiensTable>;
+export type AccountLienUpdate = Updateable<AccountLiensTable>;
+export type StandingInstruction = Selectable<StandingInstructionsTable>;
+export type NewStandingInstruction = Insertable<StandingInstructionsTable>;
+export type StandingInstructionUpdate = Updateable<StandingInstructionsTable>;
+export type MemberCredential = Selectable<MemberCredentialsTable>;
+export type NewMemberCredential = Insertable<MemberCredentialsTable>;
+export type MemberCredentialUpdate = Updateable<MemberCredentialsTable>;
+export type FeeSchedule = Selectable<FeeSchedulesTable>;
+export type NewFeeSchedule = Insertable<FeeSchedulesTable>;
+export type FeeScheduleUpdate = Updateable<FeeSchedulesTable>;
+export type TransactionLimit = Selectable<TransactionLimitsTable>;
+export type NewTransactionLimit = Insertable<TransactionLimitsTable>;
+export type TransactionLimitUpdate = Updateable<TransactionLimitsTable>;

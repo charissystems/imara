@@ -3,10 +3,10 @@ import { Hono } from 'hono';
 import { z } from 'zod';
 import { Env } from '../middleware/types';
 import { validate, getValidatedData, commonSchemas } from '../middleware/validation';
-import { NotFoundError, UnauthorizedError } from '../middleware/errorHandler';
+import { NotFoundError, UnauthorizedError, ValidationError } from '../middleware/errorHandler';
 import { ShareRepository } from '../repositories/shareRepository';
 import { ShareService } from '../services/shareService';
-import { hasPermission } from '../middleware/rbac';
+import { hasPermission, enforcePermission } from '../middleware/rbac';
 
 export const shareRoutes = new Hono<Env>();
 
@@ -565,6 +565,289 @@ shareRoutes.get('/register/member/:memberId', async (c) => {
             success: true,
             data: entries,
             meta: { count: entries.length },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// DIGITAL SHARE CERTIFICATE (SHR-010)
+// =============================================================================
+
+/**
+ * GET /shares/holdings/:id/certificate/digital
+ * Get digital share certificate data for a specific holding
+ */
+shareRoutes.get('/holdings/:id/certificate/digital', enforcePermission('shares', 'read'), async (c) => {
+    try {
+        const { id } = c.req.param();
+        const db = c.get('db')!;
+
+        const holding = await db
+            .selectFrom('share_holdings as sh')
+            .innerJoin('share_classes as sc', 'sc.id', 'sh.share_class_id')
+            .innerJoin('members as m', 'm.id', 'sh.member_id')
+            .select([
+                'sh.id',
+                'sh.member_id',
+                'sh.share_class_id',
+                'sh.total_shares',
+                'sh.average_cost_per_share',
+                'sh.certificate_number',
+                'sh.created_at',
+                'sc.code as class_code',
+                'sc.name as class_name',
+                'sc.par_value',
+                'sc.current_price',
+                'm.first_name',
+                'm.last_name',
+                'm.member_number',
+                'm.email',
+            ] as any[])
+            .where('sh.id', '=', id)
+            .where('sh.deleted_at', 'is', null)
+            .executeTakeFirst();
+
+        if (!holding) {
+            throw new NotFoundError('ShareHolding', id);
+        }
+
+        // Get SACCO info for certificate header
+        const saccoConfig = await db
+            .selectFrom('sacco_configuration')
+            .select(['organization_name'])
+            .executeTakeFirst();
+
+        const totalValue = Number(holding.total_shares || 0) * Number(holding.current_price || 0);
+
+        return c.json({
+            success: true,
+            data: {
+                certificate_number: holding.certificate_number || `SC-${holding.id.substring(0, 8).toUpperCase()}`,
+                organization: saccoConfig?.organization_name || 'SACCO',
+                holder: {
+                    name: `${holding.first_name} ${holding.last_name}`,
+                    member_number: holding.member_number,
+                    email: holding.email,
+                },
+                share_class: {
+                    code: holding.class_code,
+                    name: holding.class_name,
+                    par_value: holding.par_value?.toString(),
+                    current_price: holding.current_price?.toString(),
+                },
+                shares: {
+                    total_shares: holding.total_shares,
+                    average_cost_per_share: holding.average_cost_per_share?.toString(),
+                    total_value: totalValue.toFixed(2),
+                },
+                issue_date: holding.created_at,
+                generated_at: new Date().toISOString(),
+            },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// SHARE RETIREMENT (SHR-011)
+// =============================================================================
+
+const retireSharesSchema = z.object({
+    holding_id: commonSchemas.uuid,
+    shares_to_retire: z.number().int().positive('Shares to retire must be a positive integer'),
+    reason: z.string().min(5, 'Reason must be at least 5 characters'),
+});
+
+/**
+ * POST /shares/retire
+ * Retire/buy-back shares from a member
+ */
+shareRoutes.post('/retire', enforcePermission('shares', 'update'), validate(retireSharesSchema), async (c) => {
+    try {
+        const data = getValidatedData<z.infer<typeof retireSharesSchema>>(c);
+        const user = c.get('user');
+        const db = c.get('db')!;
+
+        // Verify holding exists
+        const holding = await db
+            .selectFrom('share_holdings')
+            .selectAll()
+            .where('id', '=', data.holding_id)
+            .where('deleted_at', 'is', null)
+            .executeTakeFirst();
+
+        if (!holding) {
+            throw new NotFoundError('ShareHolding', data.holding_id);
+        }
+
+        // Check sufficient shares
+        const currentQuantity = Number(holding.total_shares || 0);
+        if (currentQuantity < data.shares_to_retire) {
+            throw new ValidationError(
+                `Insufficient shares to retire. Holding has ${currentQuantity}, requested ${data.shares_to_retire}.`
+            );
+        }
+
+        // Get share class for pricing
+        const shareClass = await db
+            .selectFrom('share_classes')
+            .selectAll()
+            .where('id', '=', holding.share_class_id as string)
+            .executeTakeFirst();
+
+        const retirementPrice = Number(shareClass?.current_price || holding.average_cost_per_share || 0);
+        const totalAmount = retirementPrice * data.shares_to_retire;
+        const newQuantity = currentQuantity - data.shares_to_retire;
+        const now = new Date();
+        const txRef = `SR-${Date.now().toString(36).toUpperCase()}`;
+
+        // Create share transaction for retirement
+        await db
+            .insertInto('share_transactions')
+            .values({
+                holding_id: data.holding_id,
+                member_id: holding.member_id,
+                share_class_id: holding.share_class_id,
+                transaction_type: 'sell' as any,
+                quantity: data.shares_to_retire as any,
+                unit_price: String(retirementPrice) as any,
+                total_amount: String(totalAmount) as any,
+                transaction_date: now as any,
+                reference_number: txRef,
+                description: `Share retirement: ${data.reason}`,
+                recorded_by: user!.id,
+            } as any)
+            .execute();
+
+        // Update holding quantity
+        await db
+            .updateTable('share_holdings')
+            .set({
+                total_shares: newQuantity as any,
+                updated_at: now as any,
+            } as any)
+            .where('id', '=', data.holding_id)
+            .execute();
+
+        return c.json({
+            success: true,
+            data: {
+                holding_id: data.holding_id,
+                member_id: holding.member_id,
+                share_class_id: holding.share_class_id,
+                shares_retired: data.shares_to_retire,
+                retirement_price: retirementPrice,
+                total_amount: totalAmount,
+                remaining_quantity: newQuantity,
+                reference: txRef,
+                reason: data.reason,
+                retired_at: now.toISOString(),
+            },
+            meta: { retired: true },
+        }, 201);
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// FULL SHARE REGISTER (SHR-012)
+// =============================================================================
+
+/**
+ * GET /shares/register/full
+ * Get the full share register with member details and share class information
+ */
+shareRoutes.get('/register/full', enforcePermission('shares', 'read'), async (c) => {
+    try {
+        const db = c.get('db')!;
+        const page = parseInt(c.req.query('page') || '1', 10);
+        const limit = parseInt(c.req.query('limit') || '50', 10);
+        const offset = (page - 1) * limit;
+
+        // Count total entries
+        const countResult = await db
+            .selectFrom('share_holdings as sh')
+            .innerJoin('members as m', 'm.id', 'sh.member_id')
+            .innerJoin('share_classes as sc', 'sc.id', 'sh.share_class_id')
+            .select(db.fn.countAll().as('total'))
+            .where('sh.deleted_at', 'is', null)
+            .where('sh.total_shares' as any, '>', 0 as any)
+            .executeTakeFirst();
+
+        const total = Number(countResult?.total || 0);
+
+        // Fetch register entries
+        const entries = await db
+            .selectFrom('share_holdings as sh')
+            .innerJoin('members as m', 'm.id', 'sh.member_id')
+            .innerJoin('share_classes as sc', 'sc.id', 'sh.share_class_id')
+            .select([
+                'sh.id as holding_id',
+                'sh.member_id',
+                'sh.share_class_id',
+                'sh.total_shares',
+                'sh.average_cost_per_share',
+                'sh.certificate_number',
+                'sh.created_at as holding_since',
+                'm.first_name',
+                'm.last_name',
+                'm.member_number',
+                'm.email',
+                'sc.code as class_code',
+                'sc.name as class_name',
+                'sc.par_value',
+                'sc.current_price',
+            ] as any[])
+            .where('sh.deleted_at', 'is', null)
+            .where('sh.total_shares' as any, '>', 0 as any)
+            .orderBy('m.member_number', 'asc')
+            .offset(offset)
+            .limit(limit)
+            .execute();
+
+        // Calculate totals
+        const totalShares = entries.reduce((sum, e) => sum + Number((e as any).total_shares || 0), 0);
+        const totalValue = entries.reduce(
+            (sum, e) => sum + (Number((e as any).total_shares || 0) * Number((e as any).current_price || 0)), 0
+        );
+
+        return c.json({
+            success: true,
+            data: entries.map(e => ({
+                holding_id: e.holding_id,
+                member: {
+                    id: e.member_id,
+                    name: `${e.first_name} ${e.last_name}`,
+                    member_number: e.member_number,
+                    email: e.email,
+                },
+                share_class: {
+                    id: e.share_class_id,
+                    code: e.class_code,
+                    name: e.class_name,
+                    par_value: e.par_value?.toString(),
+                    current_price: e.current_price?.toString(),
+                },
+                quantity: e.quantity,
+                average_cost: e.average_cost?.toString(),
+                certificate_number: e.certificate_number,
+                holding_since: e.holding_since,
+                current_value: (Number(e.quantity || 0) * Number(e.current_price || 0)).toFixed(2),
+            })),
+            meta: {
+                page,
+                limit,
+                total,
+                total_pages: Math.ceil(total / limit),
+                totals: {
+                    total_shares: totalShares,
+                    total_value: totalValue.toFixed(2),
+                },
+            },
         });
     } catch (error) {
         throw error;

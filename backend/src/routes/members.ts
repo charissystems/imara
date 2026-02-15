@@ -8,7 +8,7 @@ import { AccountRepository } from '../repositories/accountRepository';
 import { LoanRepository } from '../repositories/loanRepository';
 import { MemberService } from '../services/memberService';
 import { getTenantDb } from '../config/database';
-import { hasPermission } from '../middleware/rbac';
+import { hasPermission, enforcePermission } from '../middleware/rbac';
 
 export const memberRoutes = new Hono<Env>();
 
@@ -736,6 +736,579 @@ memberRoutes.post('/:id/portal-credentials', async (c) => {
                 welcomeMessage: welcome,
             },
             meta: { generated: true }
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// BENEFICIARY MANAGEMENT
+// =============================================================================
+
+const createBeneficiarySchema = z.object({
+    account_id: z.string().uuid().nullable().optional(),
+    full_name: z.string().min(2, 'Full name must be at least 2 characters'),
+    relationship: z.string().min(1, 'Relationship is required'),
+    phone: commonSchemas.phone.optional(),
+    email: commonSchemas.email.optional(),
+    national_id: z.string().optional(),
+    percentage_share: z.number().min(0).max(100),
+    is_primary: z.boolean().default(false),
+});
+
+const updateBeneficiarySchema = z.object({
+    full_name: z.string().min(2).optional(),
+    relationship: z.string().min(1).optional(),
+    phone: commonSchemas.phone.optional(),
+    email: commonSchemas.email.optional(),
+    national_id: z.string().optional(),
+    percentage_share: z.number().min(0).max(100).optional(),
+    is_primary: z.boolean().optional(),
+    status: z.enum(['active', 'inactive', 'removed']).optional(),
+});
+
+const communicationPreferencesSchema = z.object({
+    sms_enabled: z.boolean().optional(),
+    email_enabled: z.boolean().optional(),
+    push_enabled: z.boolean().optional(),
+    in_app_enabled: z.boolean().optional(),
+    transaction_alerts: z.boolean().optional(),
+    promotional_messages: z.boolean().optional(),
+    loan_related: z.boolean().optional(),
+    account_statements: z.boolean().optional(),
+    system_notifications: z.boolean().optional(),
+    quiet_hours_start: z.string().nullable().optional(),
+    quiet_hours_end: z.string().nullable().optional(),
+    quiet_hours_enabled: z.boolean().optional(),
+});
+
+/**
+ * GET /members/:id/beneficiaries
+ * List all beneficiaries for a member
+ */
+memberRoutes.get('/:id/beneficiaries', enforcePermission('members', 'read'), async (c) => {
+    try {
+        const { id } = c.req.param();
+        const { schema_name } = c.get('tenant')!;
+        const db = getTenantDb(schema_name);
+
+        const memberRepo = new MemberRepository(schema_name);
+        const member = await memberRepo.findById(id);
+        if (!member) {
+            throw new NotFoundError('Member', id);
+        }
+
+        const beneficiaries = await db
+            .selectFrom('beneficiaries')
+            .selectAll()
+            .where('member_id', '=', id)
+            .where('deleted_at', 'is', null)
+            .orderBy('is_primary', 'desc')
+            .orderBy('created_at', 'asc')
+            .execute();
+
+        const totalShare = beneficiaries.reduce((sum, b) => sum + Number(b.percentage_share || 0), 0);
+
+        return c.json({
+            success: true,
+            data: beneficiaries,
+            meta: {
+                count: beneficiaries.length,
+                totalShareAllocated: totalShare,
+                remainingShare: 100 - totalShare,
+            }
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * POST /members/:id/beneficiaries
+ * Add a beneficiary to a member
+ */
+memberRoutes.post('/:id/beneficiaries', enforcePermission('members', 'update'), validate(createBeneficiarySchema), async (c) => {
+    try {
+        const { id } = c.req.param();
+        const data = getValidatedData<z.infer<typeof createBeneficiarySchema>>(c);
+        const { schema_name } = c.get('tenant')!;
+        const user = c.get('user');
+        const db = getTenantDb(schema_name);
+
+        const memberRepo = new MemberRepository(schema_name);
+        const member = await memberRepo.findById(id);
+        if (!member) {
+            throw new NotFoundError('Member', id);
+        }
+
+        // Check total percentage share does not exceed 100
+        const existing = await db
+            .selectFrom('beneficiaries')
+            .selectAll()
+            .where('member_id', '=', id)
+            .where('deleted_at', 'is', null)
+            .where('status', '!=', 'removed')
+            .execute();
+
+        const currentTotal = existing.reduce((sum, b) => sum + Number(b.percentage_share || 0), 0);
+        if (currentTotal + data.percentage_share > 100) {
+            throw new ValidationError('Total beneficiary share would exceed 100%');
+        }
+
+        const beneficiary = await db
+            .insertInto('beneficiaries')
+            .values({
+                member_id: id,
+                account_id: data.account_id || null,
+                full_name: data.full_name,
+                relationship: data.relationship,
+                phone: data.phone || null,
+                email: data.email || null,
+                national_id: data.national_id || null,
+                percentage_share: String(data.percentage_share) as any,
+                is_primary: data.is_primary,
+                status: 'active' as any,
+                created_by: user?.id || null,
+            } as any)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+
+        return c.json({
+            success: true,
+            data: beneficiary,
+            meta: { created: true }
+        }, 201);
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * PUT /members/:id/beneficiaries/:beneficiaryId
+ * Update a beneficiary
+ */
+memberRoutes.put('/:id/beneficiaries/:beneficiaryId', enforcePermission('members', 'update'), validate(updateBeneficiarySchema), async (c) => {
+    try {
+        const { id, beneficiaryId } = c.req.param();
+        const data = getValidatedData<z.infer<typeof updateBeneficiarySchema>>(c);
+        const { schema_name } = c.get('tenant')!;
+        const db = getTenantDb(schema_name);
+
+        const existing = await db
+            .selectFrom('beneficiaries')
+            .selectAll()
+            .where('id', '=', beneficiaryId)
+            .where('member_id', '=', id)
+            .where('deleted_at', 'is', null)
+            .executeTakeFirst();
+
+        if (!existing) {
+            throw new NotFoundError('Beneficiary', beneficiaryId);
+        }
+
+        // Validate percentage share if being updated
+        if (data.percentage_share !== undefined) {
+            const otherBeneficiaries = await db
+                .selectFrom('beneficiaries')
+                .selectAll()
+                .where('member_id', '=', id)
+                .where('id', '!=', beneficiaryId)
+                .where('deleted_at', 'is', null)
+                .where('status', '!=', 'removed')
+                .execute();
+
+            const othersTotal = otherBeneficiaries.reduce((sum, b) => sum + Number(b.percentage_share || 0), 0);
+            if (othersTotal + data.percentage_share > 100) {
+                throw new ValidationError('Total beneficiary share would exceed 100%');
+            }
+        }
+
+        const updates: Record<string, any> = { updated_at: new Date() };
+        if (data.full_name !== undefined) updates.full_name = data.full_name;
+        if (data.relationship !== undefined) updates.relationship = data.relationship;
+        if (data.phone !== undefined) updates.phone = data.phone;
+        if (data.email !== undefined) updates.email = data.email;
+        if (data.national_id !== undefined) updates.national_id = data.national_id;
+        if (data.percentage_share !== undefined) updates.percentage_share = String(data.percentage_share);
+        if (data.is_primary !== undefined) updates.is_primary = data.is_primary;
+        if (data.status !== undefined) updates.status = data.status;
+
+        const updated = await db
+            .updateTable('beneficiaries')
+            .set(updates as any)
+            .where('id', '=', beneficiaryId)
+            .where('member_id', '=', id)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+
+        return c.json({
+            success: true,
+            data: updated,
+            meta: { updated: true }
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * DELETE /members/:id/beneficiaries/:beneficiaryId
+ * Soft-delete a beneficiary
+ */
+memberRoutes.delete('/:id/beneficiaries/:beneficiaryId', enforcePermission('members', 'update'), async (c) => {
+    try {
+        const { id, beneficiaryId } = c.req.param();
+        const { schema_name } = c.get('tenant')!;
+        const db = getTenantDb(schema_name);
+
+        const existing = await db
+            .selectFrom('beneficiaries')
+            .selectAll()
+            .where('id', '=', beneficiaryId)
+            .where('member_id', '=', id)
+            .where('deleted_at', 'is', null)
+            .executeTakeFirst();
+
+        if (!existing) {
+            throw new NotFoundError('Beneficiary', beneficiaryId);
+        }
+
+        await db
+            .updateTable('beneficiaries')
+            .set({ deleted_at: new Date(), status: 'removed' } as any)
+            .where('id', '=', beneficiaryId)
+            .execute();
+
+        return c.json({
+            success: true,
+            meta: { deleted: true }
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// NEXT OF KIN
+// =============================================================================
+
+/**
+ * GET /members/:id/next-of-kin
+ * Get next-of-kin details for a member
+ */
+memberRoutes.get('/:id/next-of-kin', enforcePermission('members', 'read'), async (c) => {
+    try {
+        const { id } = c.req.param();
+        const { schema_name } = c.get('tenant')!;
+
+        const memberRepo = new MemberRepository(schema_name);
+        const member = await memberRepo.findById(id);
+        if (!member) {
+            throw new NotFoundError('Member', id);
+        }
+
+        return c.json({
+            success: true,
+            data: member.next_of_kin || {},
+            meta: { memberId: id }
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * PUT /members/:id/next-of-kin
+ * Update next-of-kin details for a member
+ */
+memberRoutes.put('/:id/next-of-kin', enforcePermission('members', 'update'), async (c) => {
+    try {
+        const { id } = c.req.param();
+        const body = await c.req.json();
+        const { schema_name } = c.get('tenant')!;
+        const user = c.get('user');
+
+        const memberRepo = new MemberRepository(schema_name);
+        const member = await memberRepo.findById(id);
+        if (!member) {
+            throw new NotFoundError('Member', id);
+        }
+
+        const updated = await memberRepo.update(id, {
+            next_of_kin: body,
+            updated_by: user?.id || null,
+        } as any);
+
+        return c.json({
+            success: true,
+            data: updated?.next_of_kin || body,
+            meta: { updated: true }
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// AUDIT & ACTIVITY LOGS
+// =============================================================================
+
+/**
+ * GET /members/:id/audit-log
+ * Retrieve audit log entries related to a member
+ */
+memberRoutes.get('/:id/audit-log', enforcePermission('audit', 'read'), async (c) => {
+    try {
+        const { id } = c.req.param();
+        const { schema_name } = c.get('tenant')!;
+        const page = parseInt(c.req.query('page') || '1', 10);
+        const limit = Math.min(parseInt(c.req.query('limit') || '50', 10), 200);
+        const db = getTenantDb(schema_name);
+
+        const memberRepo = new MemberRepository(schema_name);
+        const member = await memberRepo.findById(id);
+        if (!member) {
+            throw new NotFoundError('Member', id);
+        }
+
+        const entries = await db
+            .selectFrom('audit_log')
+            .selectAll()
+            .where('entity_type', '=', 'member')
+            .where('entity_id', '=', id)
+            .orderBy('timestamp', 'desc')
+            .execute();
+
+        const total = entries.length;
+        const offset = (page - 1) * limit;
+        const paginated = entries.slice(offset, offset + limit);
+
+        return c.json({
+            success: true,
+            data: paginated,
+            meta: {
+                count: paginated.length,
+                total,
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit),
+            }
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * GET /members/:id/activity-log
+ * Retrieve activity log entries for a member
+ */
+memberRoutes.get('/:id/activity-log', enforcePermission('audit', 'read'), async (c) => {
+    try {
+        const { id } = c.req.param();
+        const { schema_name } = c.get('tenant')!;
+        const page = parseInt(c.req.query('page') || '1', 10);
+        const limit = Math.min(parseInt(c.req.query('limit') || '50', 10), 200);
+        const db = getTenantDb(schema_name);
+
+        const memberRepo = new MemberRepository(schema_name);
+        const member = await memberRepo.findById(id);
+        if (!member) {
+            throw new NotFoundError('Member', id);
+        }
+
+        const entries = await db
+            .selectFrom('activity_log')
+            .selectAll()
+            .where('entity_type', '=', 'member')
+            .where('entity_id', '=', id)
+            .orderBy('timestamp', 'desc')
+            .execute();
+
+        const total = entries.length;
+        const offset = (page - 1) * limit;
+        const paginated = entries.slice(offset, offset + limit);
+
+        return c.json({
+            success: true,
+            data: paginated,
+            meta: {
+                count: paginated.length,
+                total,
+                page,
+                limit,
+                totalPages: Math.ceil(total / limit),
+            }
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// WELCOME MESSAGE & COMMUNICATION PREFERENCES
+// =============================================================================
+
+/**
+ * POST /members/:id/welcome-message
+ * Dispatch a welcome message to the member
+ */
+memberRoutes.post('/:id/welcome-message', enforcePermission('members', 'update'), async (c) => {
+    try {
+        const { id } = c.req.param();
+        const { schema_name } = c.get('tenant')!;
+
+        const memberRepo = new MemberRepository(schema_name);
+        const member = await memberRepo.findById(id);
+        if (!member) {
+            throw new NotFoundError('Member', id);
+        }
+
+        const memberService = new MemberService();
+        const welcome = memberService.generateWelcomeMessage(
+            {
+                id: member.id,
+                tenantId: '',
+                memberNumber: member.member_number,
+                fullName: `${member.first_name} ${member.last_name}`,
+                dateOfBirth: new Date(),
+                gender: 'Other',
+                nationality: '',
+                nationalId: '',
+                idDocumentType: 'NIN',
+                physicalAddress: '',
+                postalAddress: '',
+                occupation: '',
+                phone: member.phone || '',
+                email: member.email || '',
+                status: 'Active',
+                joinDate: new Date(member.joined_date as any),
+                registrationDate: new Date(),
+                createdBy: '',
+                createdAt: new Date(),
+                updatedAt: new Date(),
+            },
+            `https://${c.get('tenant')!.code}.portal.example.com`
+        );
+
+        return c.json({
+            success: true,
+            data: {
+                memberId: id,
+                message: welcome,
+            },
+            meta: { dispatched: true }
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * GET /members/:id/communication-preferences
+ * Get communication preferences for a member
+ */
+memberRoutes.get('/:id/communication-preferences', enforcePermission('members', 'read'), async (c) => {
+    try {
+        const { id } = c.req.param();
+        const { schema_name } = c.get('tenant')!;
+        const db = getTenantDb(schema_name);
+
+        const memberRepo = new MemberRepository(schema_name);
+        const member = await memberRepo.findById(id);
+        if (!member) {
+            throw new NotFoundError('Member', id);
+        }
+
+        const prefs = await db
+            .selectFrom('communication_preferences')
+            .selectAll()
+            .where('member_id', '=', id)
+            .executeTakeFirst();
+
+        return c.json({
+            success: true,
+            data: prefs || {
+                member_id: id,
+                sms_enabled: true,
+                email_enabled: true,
+                push_enabled: false,
+                in_app_enabled: true,
+                transaction_alerts: true,
+                promotional_messages: false,
+                loan_related: true,
+                account_statements: true,
+                system_notifications: true,
+                quiet_hours_enabled: false,
+                quiet_hours_start: null,
+                quiet_hours_end: null,
+            },
+            meta: { exists: !!prefs }
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * PUT /members/:id/communication-preferences
+ * Update communication preferences for a member
+ */
+memberRoutes.put('/:id/communication-preferences', enforcePermission('members', 'update'), validate(communicationPreferencesSchema), async (c) => {
+    try {
+        const { id } = c.req.param();
+        const data = getValidatedData<z.infer<typeof communicationPreferencesSchema>>(c);
+        const { schema_name } = c.get('tenant')!;
+        const db = getTenantDb(schema_name);
+
+        const memberRepo = new MemberRepository(schema_name);
+        const member = await memberRepo.findById(id);
+        if (!member) {
+            throw new NotFoundError('Member', id);
+        }
+
+        // Check if preferences already exist
+        const existing = await db
+            .selectFrom('communication_preferences')
+            .selectAll()
+            .where('member_id', '=', id)
+            .executeTakeFirst();
+
+        let result;
+        if (existing) {
+            result = await db
+                .updateTable('communication_preferences')
+                .set({ ...data, updated_at: new Date() } as any)
+                .where('member_id', '=', id)
+                .returningAll()
+                .executeTakeFirstOrThrow();
+        } else {
+            result = await db
+                .insertInto('communication_preferences')
+                .values({
+                    member_id: id,
+                    sms_enabled: data.sms_enabled ?? true,
+                    email_enabled: data.email_enabled ?? true,
+                    push_enabled: data.push_enabled ?? false,
+                    in_app_enabled: data.in_app_enabled ?? true,
+                    transaction_alerts: data.transaction_alerts ?? true,
+                    promotional_messages: data.promotional_messages ?? false,
+                    loan_related: data.loan_related ?? true,
+                    account_statements: data.account_statements ?? true,
+                    system_notifications: data.system_notifications ?? true,
+                    quiet_hours_start: data.quiet_hours_start || null,
+                    quiet_hours_end: data.quiet_hours_end || null,
+                    quiet_hours_enabled: data.quiet_hours_enabled ?? false,
+                } as any)
+                .returningAll()
+                .executeTakeFirstOrThrow();
+        }
+
+        return c.json({
+            success: true,
+            data: result,
+            meta: { updated: true }
         });
     } catch (error) {
         throw error;

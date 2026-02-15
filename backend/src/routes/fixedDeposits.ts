@@ -5,7 +5,7 @@ import { Env } from '../middleware/types';
 import { validate, getValidatedData, commonSchemas } from '../middleware/validation';
 import { NotFoundError, UnauthorizedError } from '../middleware/errorHandler';
 import { FixedDepositService } from '../services/fixedDepositService';
-import { hasPermission } from '../middleware/rbac';
+import { hasPermission, enforcePermission } from '../middleware/rbac';
 
 export const fixedDepositRoutes = new Hono<Env>();
 
@@ -621,6 +621,308 @@ fixedDepositRoutes.get('/:depositId/alerts', async (c) => {
             success: true,
             data: alerts,
             meta: { count: alerts.length },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// MATURING FDs (FD-010)
+// =============================================================================
+
+/**
+ * GET /fixed-deposits/maturing
+ * List fixed deposits maturing within N days
+ */
+fixedDepositRoutes.get('/maturing', enforcePermission('fixed_deposits', 'read'), async (c) => {
+    try {
+        const db = c.get('db')!;
+        const days = parseInt(c.req.query('days') || '30', 10);
+
+        const now = new Date();
+        const cutoffDate = new Date(now);
+        cutoffDate.setDate(cutoffDate.getDate() + days);
+
+        const maturingDeposits = await db
+            .selectFrom('fixed_deposits as fd')
+            .innerJoin('members as m', 'm.id', 'fd.member_id')
+            .innerJoin('fixed_deposit_products as fp', 'fp.id', 'fd.product_id')
+            .select([
+                'fd.id',
+                'fd.certificate_number',
+                'fd.member_id',
+                'fd.product_id',
+                'fd.principal_amount',
+                'fd.interest_rate',
+                'fd.deposit_date',
+                'fd.maturity_date',
+                'fd.interest_accrued',
+                'fd.status',
+                'fd.maturity_action',
+                'm.first_name',
+                'm.last_name',
+                'm.member_number',
+                'm.phone',
+                'm.email',
+                'fp.name as product_name',
+                'fp.code as product_code',
+            ] as any[])
+            .where('fd.maturity_date', '<=', cutoffDate as any)
+            .where('fd.maturity_date', '>=', now as any)
+            .where('fd.status', '=', 'active' as any)
+            .where('fd.deleted_at', 'is', null)
+            .orderBy('fd.maturity_date', 'asc')
+            .execute();
+
+        return c.json({
+            success: true,
+            data: maturingDeposits.map(fd => ({
+                id: fd.id,
+                certificate_number: fd.certificate_number,
+                member: {
+                    id: fd.member_id,
+                    name: `${fd.first_name} ${fd.last_name}`,
+                    member_number: fd.member_number,
+                    phone: fd.phone,
+                    email: fd.email,
+                },
+                product: {
+                    id: fd.product_id,
+                    name: fd.product_name,
+                    code: fd.product_code,
+                },
+                principal_amount: fd.principal_amount?.toString(),
+                interest_rate: fd.interest_rate?.toString(),
+                interest_accrued: fd.interest_accrued?.toString(),
+                deposit_date: fd.deposit_date,
+                maturity_date: fd.maturity_date,
+                days_to_maturity: Math.ceil(
+                    (new Date(fd.maturity_date as any).getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
+                ),
+                maturity_action: fd.maturity_action,
+            })),
+            meta: {
+                count: maturingDeposits.length,
+                days_window: days,
+                as_of: now.toISOString(),
+            },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// FD MATURITY ALERT CONFIG (FD-011)
+// =============================================================================
+
+const alertConfigSchema = z.object({
+    days_before: z.number().int().positive('Days before must be a positive integer'),
+    alert_type: z.enum(['sms', 'email', 'both']),
+    recipient_id: commonSchemas.uuid.optional(),
+});
+
+/**
+ * POST /fixed-deposits/:id/alert-config
+ * Configure maturity alert for a fixed deposit
+ */
+fixedDepositRoutes.post('/:id/alert-config', enforcePermission('fixed_deposits', 'update'), validate(alertConfigSchema), async (c) => {
+    try {
+        const { id } = c.req.param();
+        const data = getValidatedData<z.infer<typeof alertConfigSchema>>(c);
+        const user = c.get('user');
+        const db = c.get('db')!;
+
+        // Verify FD exists
+        const fd = await db
+            .selectFrom('fixed_deposits')
+            .select(['id', 'member_id', 'certificate_number', 'maturity_date', 'status'])
+            .where('id', '=', id)
+            .where('deleted_at', 'is', null)
+            .executeTakeFirst();
+
+        if (!fd) {
+            throw new NotFoundError('FixedDeposit', id);
+        }
+
+        const now = new Date();
+
+        // Insert alert configuration
+        const alertConfig = await db
+            .insertInto('fd_maturity_alerts')
+            .values({
+                fixed_deposit_id: id,
+                days_before: data.days_before as any,
+                alert_type: data.alert_type as any,
+                recipient_id: data.recipient_id || fd.member_id,
+                is_sent: false as any,
+                created_by: user!.id,
+                created_at: now as any,
+            } as any)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+
+        return c.json({
+            success: true,
+            data: {
+                id: alertConfig.id,
+                fixed_deposit_id: id,
+                certificate_number: fd.certificate_number,
+                maturity_date: fd.maturity_date,
+                days_before: data.days_before,
+                alert_type: data.alert_type,
+                recipient_id: data.recipient_id || fd.member_id,
+                alert_date: (() => {
+                    const alertDate = new Date(fd.maturity_date as any);
+                    alertDate.setDate(alertDate.getDate() - data.days_before);
+                    return alertDate.toISOString().split('T')[0];
+                })(),
+                created_at: now.toISOString(),
+            },
+            meta: { created: true },
+        }, 201);
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// FD LEDGER (FD-012)
+// =============================================================================
+
+/**
+ * GET /fixed-deposits/ledger
+ * Get FD ledger with interest schedules
+ */
+fixedDepositRoutes.get('/ledger', enforcePermission('fixed_deposits', 'read'), async (c) => {
+    try {
+        const db = c.get('db')!;
+        const page = parseInt(c.req.query('page') || '1', 10);
+        const limit = parseInt(c.req.query('limit') || '50', 10);
+        const offset = (page - 1) * limit;
+        const statusFilter = c.req.query('status') as string | undefined;
+
+        // Count total
+        let countQuery = db
+            .selectFrom('fixed_deposits as fd')
+            .select(db.fn.countAll().as('total'))
+            .where('fd.deleted_at', 'is', null);
+
+        if (statusFilter) {
+            countQuery = countQuery.where('fd.status', '=', statusFilter as any);
+        }
+
+        const countResult = await countQuery.executeTakeFirst();
+        const total = Number(countResult?.total || 0);
+
+        // Fetch FD entries
+        let fdQuery = db
+            .selectFrom('fixed_deposits as fd')
+            .innerJoin('fixed_deposit_products as fp', 'fp.id', 'fd.product_id')
+            .innerJoin('members as m', 'm.id', 'fd.member_id')
+            .select([
+                'fd.id',
+                'fd.certificate_number',
+                'fd.member_id',
+                'fd.product_id',
+                'fd.principal_amount',
+                'fd.interest_rate',
+                'fd.deposit_date',
+                'fd.maturity_date',
+                'fd.interest_accrued',
+                'fd.interest_paid',
+                'fd.withholding_tax_amount',
+                'fd.total_interest_payable',
+                'fd.status',
+                'fd.maturity_action',
+                'fp.name as product_name',
+                'fp.code as product_code',
+                'fp.interest_paid_frequency',
+                'm.first_name',
+                'm.last_name',
+                'm.member_number',
+            ])
+            .where('fd.deleted_at', 'is', null);
+
+        if (statusFilter) {
+            fdQuery = fdQuery.where('fd.status', '=', statusFilter as any);
+        }
+
+        const deposits = await fdQuery
+            .orderBy('fd.deposit_date', 'desc')
+            .offset(offset)
+            .limit(limit)
+            .execute();
+
+        // Fetch interest schedules for these FDs
+        const fdIds = deposits.map(d => d.id);
+        let interestSchedules: any[] = [];
+
+        if (fdIds.length > 0) {
+            interestSchedules = await db
+                .selectFrom('fd_interest_schedules')
+                .selectAll()
+                .where('fixed_deposit_id', 'in', fdIds)
+                .orderBy('fixed_deposit_id', 'asc')
+                .orderBy('interest_period_number', 'asc')
+                .execute();
+        }
+
+        // Group schedules by FD
+        const schedulesByFd: Record<string, any[]> = {};
+        for (const schedule of interestSchedules) {
+            const fdId = schedule.fixed_deposit_id as string;
+            if (!schedulesByFd[fdId]) {
+                schedulesByFd[fdId] = [];
+            }
+            schedulesByFd[fdId].push({
+                period_number: schedule.interest_period_number,
+                period_start: schedule.period_start_date,
+                period_end: schedule.period_end_date,
+                interest_amount: schedule.interest_amount?.toString(),
+                withholding_tax: schedule.withholding_tax?.toString(),
+                net_interest: schedule.net_interest?.toString(),
+                status: schedule.status,
+                paid_date: schedule.paid_date,
+            });
+        }
+
+        return c.json({
+            success: true,
+            data: deposits.map(fd => ({
+                id: fd.id,
+                certificate_number: fd.certificate_number,
+                member: {
+                    id: fd.member_id,
+                    name: `${fd.first_name} ${fd.last_name}`,
+                    member_number: fd.member_number,
+                },
+                product: {
+                    id: fd.product_id,
+                    name: fd.product_name,
+                    code: fd.product_code,
+                    interest_paid_frequency: fd.interest_paid_frequency,
+                },
+                principal_amount: fd.principal_amount?.toString(),
+                interest_rate: fd.interest_rate?.toString(),
+                deposit_date: fd.deposit_date,
+                maturity_date: fd.maturity_date,
+                interest_accrued: fd.interest_accrued?.toString(),
+                interest_paid: fd.interest_paid?.toString(),
+                total_interest_payable: fd.total_interest_payable?.toString(),
+                withholding_tax_amount: fd.withholding_tax_amount?.toString(),
+                status: fd.status,
+                maturity_action: fd.maturity_action,
+                interest_schedule: schedulesByFd[fd.id] || [],
+            })),
+            meta: {
+                page,
+                limit,
+                total,
+                total_pages: Math.ceil(total / limit),
+                status_filter: statusFilter || 'all',
+            },
         });
     } catch (error) {
         throw error;

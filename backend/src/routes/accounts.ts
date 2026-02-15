@@ -7,7 +7,7 @@ import { validate, getValidatedData, commonSchemas } from '../middleware/validat
 import { ValidationError, NotFoundError, UnauthorizedError } from '../middleware/errorHandler';
 import { AccountRepository } from '../repositories/accountRepository';
 import { SavingsService } from '../services/savingsService';
-import { hasPermission } from '../middleware/rbac';
+import { hasPermission, enforcePermission } from '../middleware/rbac';
 
 export const accountRoutes = new Hono<Env>();
 
@@ -1091,6 +1091,414 @@ accountRoutes.get('/:accountId/statement', async (c) => {
                     entryCount: entries.length,
                 },
             },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// STANDING INSTRUCTIONS
+// =============================================================================
+
+const createStandingInstructionSchema = z.object({
+    member_id: commonSchemas.uuid,
+    instruction_type: z.enum(['savings_split', 'loan_repayment', 'transfer', 'share_purchase']),
+    source_account_id: commonSchemas.uuid,
+    destination_account_id: z.string().uuid().nullable().optional(),
+    destination_external: z.record(z.string(), z.unknown()).nullable().optional(),
+    amount: z.number().positive('Amount must be positive'),
+    frequency: z.enum(['daily', 'weekly', 'biweekly', 'monthly', 'quarterly', 'annually']),
+    start_date: z.string().datetime(),
+    end_date: z.string().datetime().nullable().optional(),
+    max_executions: z.number().int().positive().nullable().optional(),
+});
+
+const updateStandingInstructionSchema = z.object({
+    amount: z.number().positive().optional(),
+    frequency: z.enum(['daily', 'weekly', 'biweekly', 'monthly', 'quarterly', 'annually']).optional(),
+    end_date: z.string().datetime().nullable().optional(),
+    max_executions: z.number().int().positive().nullable().optional(),
+    status: z.enum(['active', 'paused', 'completed', 'cancelled']).optional(),
+});
+
+const placeLienSchema = z.object({
+    account_id: commonSchemas.uuid,
+    amount: z.number().positive('Lien amount must be positive'),
+    reason: z.string().min(1, 'Reason is required'),
+    lien_type: z.enum(['loan_collateral', 'legal_hold', 'manual']).default('manual'),
+    related_loan_id: z.string().uuid().nullable().optional(),
+});
+
+const releaseLienSchema = z.object({
+    release_reason: z.string().min(1, 'Release reason is required'),
+});
+
+/**
+ * GET /accounts/standing-instructions
+ * List standing instructions, optionally filtered by member_id
+ */
+accountRoutes.get('/standing-instructions', enforcePermission('savings', 'read'), async (c) => {
+    try {
+        const db = c.get('db')!;
+        const memberId = c.req.query('member_id');
+
+        let query = db
+            .selectFrom('standing_instructions')
+            .selectAll()
+            .where('deleted_at', 'is', null);
+
+        if (memberId) {
+            query = query.where('member_id', '=', memberId);
+        }
+
+        const instructions = await query
+            .orderBy('created_at', 'desc')
+            .execute();
+
+        return c.json({
+            success: true,
+            data: instructions,
+            meta: { count: instructions.length }
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * POST /accounts/standing-instructions
+ * Create a new standing instruction
+ */
+accountRoutes.post('/standing-instructions', enforcePermission('savings', 'create'), validate(createStandingInstructionSchema), async (c) => {
+    try {
+        const data = getValidatedData<z.infer<typeof createStandingInstructionSchema>>(c);
+        const user = c.get('user');
+        const db = c.get('db')!;
+        const { schema_name } = c.get('tenant')!;
+        const accountRepo = new AccountRepository(schema_name);
+
+        // Verify source account exists
+        const sourceAccount = await accountRepo.findById(data.source_account_id);
+        if (!sourceAccount) {
+            throw new NotFoundError('Account', data.source_account_id);
+        }
+
+        // Verify destination account if provided
+        if (data.destination_account_id) {
+            const destAccount = await accountRepo.findById(data.destination_account_id);
+            if (!destAccount) {
+                throw new NotFoundError('Account', data.destination_account_id);
+            }
+        }
+
+        const instruction = await db
+            .insertInto('standing_instructions')
+            .values({
+                member_id: data.member_id,
+                instruction_type: data.instruction_type as any,
+                source_account_id: data.source_account_id,
+                destination_account_id: data.destination_account_id || null,
+                destination_external: data.destination_external ? JSON.stringify(data.destination_external) as any : null,
+                amount: String(data.amount) as any,
+                frequency: data.frequency as any,
+                start_date: new Date(data.start_date) as any,
+                end_date: data.end_date ? new Date(data.end_date) as any : null,
+                next_execution_date: new Date(data.start_date) as any,
+                max_executions: data.max_executions || null,
+                status: 'active' as any,
+                created_by: user?.id || null,
+            } as any)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+
+        return c.json({
+            success: true,
+            data: instruction,
+            meta: { created: true }
+        }, 201);
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * PATCH /accounts/standing-instructions/:instructionId
+ * Update a standing instruction
+ */
+accountRoutes.patch('/standing-instructions/:instructionId', enforcePermission('savings', 'update'), validate(updateStandingInstructionSchema), async (c) => {
+    try {
+        const { instructionId } = c.req.param();
+        const data = getValidatedData<z.infer<typeof updateStandingInstructionSchema>>(c);
+        const db = c.get('db')!;
+
+        const existing = await db
+            .selectFrom('standing_instructions')
+            .selectAll()
+            .where('id', '=', instructionId)
+            .where('deleted_at', 'is', null)
+            .executeTakeFirst();
+
+        if (!existing) {
+            throw new NotFoundError('StandingInstruction', instructionId);
+        }
+
+        const updates: Record<string, any> = { updated_at: new Date() };
+        if (data.amount !== undefined) updates.amount = String(data.amount);
+        if (data.frequency !== undefined) updates.frequency = data.frequency;
+        if (data.end_date !== undefined) updates.end_date = data.end_date ? new Date(data.end_date) : null;
+        if (data.max_executions !== undefined) updates.max_executions = data.max_executions;
+        if (data.status !== undefined) updates.status = data.status;
+
+        const updated = await db
+            .updateTable('standing_instructions')
+            .set(updates as any)
+            .where('id', '=', instructionId)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+
+        return c.json({
+            success: true,
+            data: updated,
+            meta: { updated: true }
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * DELETE /accounts/standing-instructions/:instructionId
+ * Soft-delete (cancel) a standing instruction
+ */
+accountRoutes.delete('/standing-instructions/:instructionId', enforcePermission('savings', 'update'), async (c) => {
+    try {
+        const { instructionId } = c.req.param();
+        const db = c.get('db')!;
+
+        const existing = await db
+            .selectFrom('standing_instructions')
+            .selectAll()
+            .where('id', '=', instructionId)
+            .where('deleted_at', 'is', null)
+            .executeTakeFirst();
+
+        if (!existing) {
+            throw new NotFoundError('StandingInstruction', instructionId);
+        }
+
+        await db
+            .updateTable('standing_instructions')
+            .set({ deleted_at: new Date(), status: 'cancelled' } as any)
+            .where('id', '=', instructionId)
+            .execute();
+
+        return c.json({
+            success: true,
+            meta: { deleted: true }
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// ACCOUNT LIENS
+// =============================================================================
+
+/**
+ * GET /accounts/:accountId/liens
+ * List liens on an account
+ */
+accountRoutes.get('/:accountId/liens', enforcePermission('savings', 'read'), async (c) => {
+    try {
+        const { accountId } = c.req.param();
+        const db = c.get('db')!;
+        const { schema_name } = c.get('tenant')!;
+        const accountRepo = new AccountRepository(schema_name);
+
+        const account = await accountRepo.findById(accountId);
+        if (!account) {
+            throw new NotFoundError('Account', accountId);
+        }
+
+        const statusFilter = c.req.query('status');
+
+        let query = db
+            .selectFrom('account_liens')
+            .selectAll()
+            .where('account_id', '=', accountId);
+
+        if (statusFilter) {
+            query = query.where('status', '=', statusFilter as any);
+        }
+
+        const liens = await query
+            .orderBy('placed_at', 'desc')
+            .execute();
+
+        const totalActive = liens
+            .filter(l => l.status === 'active')
+            .reduce((sum, l) => sum + Number(l.amount || 0), 0);
+
+        return c.json({
+            success: true,
+            data: liens,
+            meta: {
+                count: liens.length,
+                totalActiveLienAmount: totalActive,
+            }
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * POST /accounts/liens
+ * Place a lien on an account
+ */
+accountRoutes.post('/liens', enforcePermission('savings', 'update'), validate(placeLienSchema), async (c) => {
+    try {
+        const data = getValidatedData<z.infer<typeof placeLienSchema>>(c);
+        const user = c.get('user');
+        const db = c.get('db')!;
+        const { schema_name } = c.get('tenant')!;
+        const accountRepo = new AccountRepository(schema_name);
+
+        // Verify account exists
+        const account = await accountRepo.findById(data.account_id);
+        if (!account) {
+            throw new NotFoundError('Account', data.account_id);
+        }
+
+        // Check that lien does not exceed account balance
+        const currentBalance = Number(account.principal_balance || 0);
+        const existingLiens = await db
+            .selectFrom('account_liens')
+            .selectAll()
+            .where('account_id', '=', data.account_id)
+            .where('status', '=', 'active')
+            .execute();
+
+        const totalExistingLiens = existingLiens.reduce((sum, l) => sum + Number(l.amount || 0), 0);
+        if (totalExistingLiens + data.amount > currentBalance) {
+            throw new ValidationError(
+                `Lien amount would exceed available balance. Balance: ${currentBalance}, existing liens: ${totalExistingLiens}, requested: ${data.amount}`
+            );
+        }
+
+        const lien = await db
+            .insertInto('account_liens')
+            .values({
+                account_id: data.account_id,
+                amount: String(data.amount) as any,
+                reason: data.reason,
+                lien_type: data.lien_type as any,
+                placed_by: user?.id || 'system',
+                placed_at: new Date() as any,
+                related_loan_id: data.related_loan_id || null,
+                status: 'active' as any,
+            } as any)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+
+        return c.json({
+            success: true,
+            data: lien,
+            meta: { created: true }
+        }, 201);
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * PATCH /accounts/liens/:lienId/release
+ * Release a lien on an account
+ */
+accountRoutes.patch('/liens/:lienId/release', enforcePermission('savings', 'update'), validate(releaseLienSchema), async (c) => {
+    try {
+        const { lienId } = c.req.param();
+        const data = getValidatedData<z.infer<typeof releaseLienSchema>>(c);
+        const user = c.get('user');
+        const db = c.get('db')!;
+
+        const existing = await db
+            .selectFrom('account_liens')
+            .selectAll()
+            .where('id', '=', lienId)
+            .executeTakeFirst();
+
+        if (!existing) {
+            throw new NotFoundError('AccountLien', lienId);
+        }
+
+        if (existing.status !== 'active') {
+            return c.json({
+                success: false,
+                error: { code: 'INVALID_STATUS', message: 'Lien is not active' }
+            }, 400);
+        }
+
+        const released = await db
+            .updateTable('account_liens')
+            .set({
+                status: 'released',
+                released_at: new Date(),
+                released_by: user?.id || null,
+                release_reason: data.release_reason,
+                updated_at: new Date(),
+            } as any)
+            .where('id', '=', lienId)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+
+        return c.json({
+            success: true,
+            data: released,
+            meta: { released: true }
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// INTEREST RATE CONFIGURATION
+// =============================================================================
+
+/**
+ * GET /accounts/interest-rate-config
+ * List interest rate configurations
+ */
+accountRoutes.get('/interest-rate-config', enforcePermission('savings', 'read'), async (c) => {
+    try {
+        const db = c.get('db')!;
+        const rateType = c.req.query('rate_type');
+        const currentOnly = c.req.query('current') === 'true';
+
+        let query = db
+            .selectFrom('interest_rate_configuration')
+            .selectAll();
+
+        if (rateType) {
+            query = query.where('rate_type', '=', rateType as any);
+        }
+
+        if (currentOnly) {
+            query = query.where('is_current', '=', true);
+        }
+
+        const configs = await query
+            .orderBy('rate_type', 'asc')
+            .orderBy('effective_from', 'desc')
+            .execute();
+
+        return c.json({
+            success: true,
+            data: configs,
+            meta: { count: configs.length }
         });
     } catch (error) {
         throw error;

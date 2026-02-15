@@ -119,6 +119,16 @@ import {
     ScheduledTaskLogsTable,
 } from './admin';
 
+import {
+    // Additional Features
+    BeneficiariesTable,
+    AccountLiensTable,
+    StandingInstructionsTable,
+    MemberCredentialsTable,
+    FeeSchedulesTable,
+    TransactionLimitsTable,
+} from './additional';
+
 /*
  * DATABASE INTERFACES
  * Kysely interface definitions mapping TypeScript to PostgreSQL schemas
@@ -221,6 +231,14 @@ export interface TenantDatabase {
     penalty_configuration: PenaltyConfigurationTable;
     scheduled_tasks: ScheduledTasksTable;
     scheduled_task_logs: ScheduledTaskLogsTable;
+
+    // Additional Features (012)
+    beneficiaries: BeneficiariesTable;
+    account_liens: AccountLiensTable;
+    standing_instructions: StandingInstructionsTable;
+    member_credentials: MemberCredentialsTable;
+    fee_schedules: FeeSchedulesTable;
+    transaction_limits: TransactionLimitsTable;
 }
 
 export interface Database extends PublicDatabase {

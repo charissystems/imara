@@ -1,0 +1,138 @@
+import { Kysely } from 'kysely';
+import { TenantDatabase } from '../database/types';
+import { createHash, randomBytes } from 'crypto';
+
+export class MemberCredentialService {
+    constructor(private db: Kysely<TenantDatabase>) {}
+
+    async setPin(memberId: string, pin: string, createdBy?: string) {
+        const salt = randomBytes(16).toString('hex');
+        const pinHash = this.hashPin(pin, salt);
+
+        // Upsert: update if exists, insert if not
+        const existing = await this.db
+            .selectFrom('member_credentials')
+            .select('id')
+            .where('member_id', '=', memberId)
+            .executeTakeFirst();
+
+        if (existing) {
+            await this.db
+                .updateTable('member_credentials')
+                .set({
+                    pin_hash: pinHash,
+                    pin_salt: salt,
+                    pin_attempts: 0,
+                    is_locked: false,
+                    locked_at: undefined,
+                    last_pin_change: new Date(),
+                    force_change: false,
+                    updated_at: new Date(),
+                })
+                .where('member_id', '=', memberId)
+                .execute();
+        } else {
+            await this.db
+                .insertInto('member_credentials')
+                .values({
+                    member_id: memberId,
+                    pin_hash: pinHash,
+                    pin_salt: salt,
+                    created_by: createdBy || null,
+                })
+                .execute();
+        }
+
+        return { success: true };
+    }
+
+    async verifyPin(memberId: string, pin: string): Promise<{ valid: boolean; locked: boolean }> {
+        const cred = await this.db
+            .selectFrom('member_credentials')
+            .selectAll()
+            .where('member_id', '=', memberId)
+            .executeTakeFirst();
+
+        if (!cred) {
+            return { valid: false, locked: false };
+        }
+
+        if (cred.is_locked) {
+            return { valid: false, locked: true };
+        }
+
+        const hash = this.hashPin(pin, cred.pin_salt);
+        if (hash === cred.pin_hash) {
+            // Reset attempts on success
+            await this.db
+                .updateTable('member_credentials')
+                .set({ pin_attempts: 0, updated_at: new Date() })
+                .where('member_id', '=', memberId)
+                .execute();
+            return { valid: true, locked: false };
+        }
+
+        // Increment failed attempts
+        const newAttempts = Number(cred.pin_attempts) + 1;
+        const shouldLock = newAttempts >= Number(cred.max_attempts);
+
+        await this.db
+            .updateTable('member_credentials')
+            .set({
+                pin_attempts: newAttempts,
+                is_locked: shouldLock,
+                locked_at: shouldLock ? new Date() : undefined,
+                updated_at: new Date(),
+            })
+            .where('member_id', '=', memberId)
+            .execute();
+
+        return { valid: false, locked: shouldLock };
+    }
+
+    async resetPin(memberId: string, resetBy: string): Promise<{ temporary_pin: string }> {
+        const tempPin = String(Math.floor(1000 + Math.random() * 9000)); // 4-digit
+        const salt = randomBytes(16).toString('hex');
+        const pinHash = this.hashPin(tempPin, salt);
+
+        const existing = await this.db
+            .selectFrom('member_credentials')
+            .select('id')
+            .where('member_id', '=', memberId)
+            .executeTakeFirst();
+
+        if (existing) {
+            await this.db
+                .updateTable('member_credentials')
+                .set({
+                    pin_hash: pinHash,
+                    pin_salt: salt,
+                    pin_attempts: 0,
+                    is_locked: false,
+                    locked_at: undefined,
+                    last_pin_change: new Date(),
+                    force_change: true,
+                    updated_at: new Date(),
+                })
+                .where('member_id', '=', memberId)
+                .execute();
+        } else {
+            await this.db
+                .insertInto('member_credentials')
+                .values({
+                    member_id: memberId,
+                    pin_hash: pinHash,
+                    pin_salt: salt,
+                    force_change: true,
+                    created_by: resetBy,
+                })
+                .execute();
+        }
+
+        return { temporary_pin: tempPin };
+    }
+
+    private hashPin(pin: string, salt: string): string {
+        return createHash('sha256').update(pin + salt).digest('hex');
+    }
+}

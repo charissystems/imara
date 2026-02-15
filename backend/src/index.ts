@@ -16,6 +16,8 @@ import { reportRoutes } from './routes/reports';     // Reports & Dashboard
 import { shareRoutes } from './routes/shares';       // Share classes, holdings, dividends
 import { fixedDepositRoutes } from './routes/fixedDeposits'; // Fixed deposit products & accounts
 import { accountingRoutes } from './routes/accounting';    // Chart of accounts, journals, statements
+import { messagingRoutes } from './routes/messaging';      // Messaging centre, templates, campaigns
+import { auditRoutes } from './routes/audit';              // Audit trails, security events, reversals
 
 const app = createApp();
 
@@ -109,6 +111,18 @@ app.route('/reports', reportRoutes);
 // ============================================================================
 // Chart of accounts, journal entries, financial periods, year-end closing
 app.route('/accounting', accountingRoutes);
+
+// ============================================================================
+// 12. MESSAGING CENTRE
+// ============================================================================
+// Message templates, campaigns, delivery logs, communication preferences
+app.route('/messaging', messagingRoutes);
+
+// ============================================================================
+// 13. AUDIT & SECURITY
+// ============================================================================
+// Audit trails, activity logs, security events, transaction reversals, member PINs
+app.route('/audit', auditRoutes);
 
 // 404 Handler
 app.notFound((c) => c.json({ error: 'Not Found' }, 404));

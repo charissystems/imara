@@ -128,6 +128,16 @@ export type {
     ScheduledTaskLogsTable,
 } from './admin';
 
+// Additional Features (012)
+export type {
+    BeneficiariesTable,
+    AccountLiensTable,
+    StandingInstructionsTable,
+    MemberCredentialsTable,
+    FeeSchedulesTable,
+    TransactionLimitsTable,
+} from './additional';
+
 // Database interfaces
 export type { PublicDatabase, TenantDatabase, Database } from './database';
 
@@ -329,6 +339,25 @@ export type {
     ScheduledTaskUpdate,
     ScheduledTaskLog,
     NewScheduledTaskLog,
+    // Additional Features (012)
+    Beneficiary,
+    NewBeneficiary,
+    BeneficiaryUpdate,
+    AccountLien,
+    NewAccountLien,
+    AccountLienUpdate,
+    StandingInstruction,
+    NewStandingInstruction,
+    StandingInstructionUpdate,
+    MemberCredential,
+    NewMemberCredential,
+    MemberCredentialUpdate,
+    FeeSchedule,
+    NewFeeSchedule,
+    FeeScheduleUpdate,
+    TransactionLimit,
+    NewTransactionLimit,
+    TransactionLimitUpdate,
 } from './crud';
 // Multitenancy & Administration
 export type {

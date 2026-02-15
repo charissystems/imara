@@ -12,7 +12,7 @@ import { LoanService } from '../services/loanService';
 import { AccountRepository } from '../repositories/accountRepository';
 import { MemberRepository } from '../repositories/memberRepository';
 import { getTenantDb } from '../config/database';
-import { hasPermission } from '../middleware/rbac';
+import { hasPermission, enforcePermission } from '../middleware/rbac';
 
 export const loanRoutes = new Hono<Env>();
 
@@ -1499,6 +1499,524 @@ loanRoutes.post('/:loanId/early-settlement', validate(earlySettlementSchema), as
                 loanClosed: true,
             },
             meta: { settled: true }
+        }, 201);
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// ELIGIBILITY REPORT (LON-011b)
+// =============================================================================
+
+const eligibilityReportSchema = z.object({
+    member_id: commonSchemas.uuid,
+    product_id: commonSchemas.uuid,
+});
+
+/**
+ * POST /loans/eligibility/report
+ * Generate a detailed eligibility report for a member against a loan product
+ */
+loanRoutes.post('/eligibility/report', enforcePermission('loans', 'read'), validate(eligibilityReportSchema), async (c) => {
+    try {
+        const data = getValidatedData<z.infer<typeof eligibilityReportSchema>>(c);
+        const { schema_name } = c.get('tenant')!;
+        const db = getTenantDb(schema_name);
+
+        const loanRepo = new LoanRepository(schema_name);
+        const accountRepo = new AccountRepository(schema_name);
+        const memberRepo = new MemberRepository(schema_name);
+
+        // Verify member and product exist
+        const member = await memberRepo.findById(data.member_id);
+        if (!member) {
+            throw new NotFoundError('Member', data.member_id);
+        }
+
+        const product = await loanRepo.findProductById(data.product_id);
+        if (!product) {
+            throw new NotFoundError('Loan Product', data.product_id);
+        }
+
+        // Query member savings balance
+        const savingsAccounts = await accountRepo.findAccountsByMemberId(data.member_id);
+        const totalSavings = savingsAccounts.reduce(
+            (sum, acc) => sum + Number(acc.principal_balance || 0), 0
+        );
+
+        // Query member share holdings
+        const shareHoldings = await db
+            .selectFrom('share_holdings')
+            .select([
+                'id',
+                'share_class_id',
+                'total_shares',
+                'average_cost_per_share',
+            ] as any[])
+            .where('member_id', '=', data.member_id)
+            .where('deleted_at', 'is', null)
+            .execute();
+
+        const totalShareValue = shareHoldings.reduce(
+            (sum, h: any) => sum + (Number(h.total_shares || 0) * Number(h.average_cost_per_share || 0)), 0
+        );
+
+        // Query existing active loans
+        const existingLoans = await loanRepo.findLoansByMemberId(data.member_id);
+        const activeLoans = existingLoans.filter(
+            l => l.status === 'active' || l.status === 'approved_pending_disbursement'
+        );
+        const outstandingLoanBalance = activeLoans.reduce(
+            (sum, l) => sum + Number(l.total_outstanding || 0), 0
+        );
+
+        // Calculate savings multiplier eligibility
+        const savingsMultiplier = 3; // Default 3x multiplier
+        const maxBySavings = totalSavings * savingsMultiplier;
+        const maxByProduct = Number(product.maximum_amount);
+        const maxAmount = Math.min(maxBySavings, maxByProduct);
+
+        // Calculate share-to-loan ratio
+        const shareToLoanRatio = outstandingLoanBalance > 0
+            ? new Decimal(totalShareValue).div(outstandingLoanBalance).toDecimalPlaces(4).toNumber()
+            : totalShareValue > 0 ? Infinity : 0;
+
+        // Membership duration
+        const joinedDate = new Date(member.joined_date as any);
+        const now = new Date();
+        const membershipMonths = (now.getFullYear() - joinedDate.getFullYear()) * 12
+            + (now.getMonth() - joinedDate.getMonth());
+
+        // Build eligibility reasons and scores
+        const reasons: string[] = [];
+        let score = 100;
+
+        if (totalSavings <= 0) {
+            reasons.push('No savings balance found. Savings are required to qualify.');
+            score -= 40;
+        }
+
+        if (maxBySavings < Number(product.minimum_amount)) {
+            reasons.push(
+                `Insufficient savings for minimum loan. Need at least ${(Number(product.minimum_amount) / savingsMultiplier).toFixed(0)} in savings.`
+            );
+            score -= 30;
+        }
+
+        if (membershipMonths < 6) {
+            reasons.push(`Membership too recent: ${membershipMonths} months (minimum 6 required).`);
+            score -= 15;
+        }
+
+        if (activeLoans.length >= 3) {
+            reasons.push(`Maximum concurrent loans reached (${activeLoans.length}/3).`);
+            score -= 25;
+        }
+
+        if (outstandingLoanBalance > totalSavings * 2) {
+            reasons.push('Outstanding loan balance exceeds 2x savings — high debt exposure.');
+            score -= 10;
+        }
+
+        score = Math.max(score, 0);
+
+        return c.json({
+            success: true,
+            data: {
+                eligible: reasons.length === 0,
+                max_amount: maxAmount,
+                reasons,
+                scores: {
+                    overall: score,
+                    savings_adequacy: totalSavings > 0 ? Math.min(100, (totalSavings / (Number(product.minimum_amount) / savingsMultiplier)) * 100) : 0,
+                    debt_exposure: outstandingLoanBalance === 0 ? 100 : Math.max(0, 100 - (outstandingLoanBalance / totalSavings) * 50),
+                    membership_tenure: Math.min(100, (membershipMonths / 12) * 100),
+                },
+                member_details: {
+                    member_id: data.member_id,
+                    membership_months: membershipMonths,
+                    total_savings: totalSavings,
+                    total_share_value: totalShareValue,
+                    active_loan_count: activeLoans.length,
+                    outstanding_loan_balance: outstandingLoanBalance,
+                    share_to_loan_ratio: shareToLoanRatio === Infinity ? 'N/A' : shareToLoanRatio,
+                },
+                product_limits: {
+                    minimum_amount: product.minimum_amount,
+                    maximum_amount: product.maximum_amount,
+                    savings_multiplier: savingsMultiplier,
+                    max_by_savings: maxBySavings,
+                },
+            },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// LOAN AGREEMENT (LON-031)
+// =============================================================================
+
+/**
+ * GET /loans/:loanId/agreement
+ * Generate agreement document data for a loan
+ */
+loanRoutes.get('/:loanId/agreement', enforcePermission('loans', 'read'), async (c) => {
+    try {
+        const { loanId } = c.req.param();
+        const { schema_name } = c.get('tenant')!;
+        const db = getTenantDb(schema_name);
+
+        // Get loan account with product and member details
+        const loan = await db
+            .selectFrom('loan_accounts as la')
+            .innerJoin('loan_products as lp', 'lp.id', 'la.product_id')
+            .innerJoin('members as m', 'm.id', 'la.member_id')
+            .select([
+                'la.id',
+                'la.loan_number',
+                'la.approved_amount',
+                'la.approved_interest_rate',
+                'la.approved_tenure_months',
+                'la.status',
+                'la.disbursement_date',
+                'la.loan_start_date',
+                'la.loan_end_date',
+                'la.principal_outstanding',
+                'la.application_id',
+                'lp.name as product_name',
+                'lp.code as product_code',
+                'lp.interest_calculation_method',
+                'lp.repayment_frequency',
+                'lp.late_payment_penalty_type',
+                'lp.late_payment_penalty',
+                'lp.requires_guarantors',
+                'm.first_name',
+                'm.last_name',
+                'm.member_number',
+                'm.email',
+                'm.phone',
+            ] as any[])
+            .where('la.id', '=', loanId)
+            .where('la.deleted_at', 'is', null)
+            .executeTakeFirst();
+
+        if (!loan) {
+            throw new NotFoundError('Loan', loanId);
+        }
+
+        // Get repayment schedule
+        const schedule = await db
+            .selectFrom('loan_schedules')
+            .selectAll()
+            .where('loan_account_id', '=', loanId)
+            .where('status', '!=', 'written_off' as any)
+            .orderBy('installment_number', 'asc')
+            .execute();
+
+        // Get guarantors if applicable
+        let guarantors: any[] = [];
+        if (loan.application_id) {
+            guarantors = await db
+                .selectFrom('loan_guarantors as lg')
+                .innerJoin('members as gm', 'gm.id', 'lg.guarantor_id')
+                .select([
+                    'lg.id',
+                    'lg.guarantor_id',
+                    'lg.guaranteed_amount',
+                    'lg.relationship',
+                    'lg.consent_obtained',
+                    'lg.contact_phone',
+                    'lg.contact_email',
+                    'gm.first_name as guarantor_first_name',
+                    'gm.last_name as guarantor_last_name',
+                    'gm.member_number as guarantor_member_number',
+                ] as any[])
+                .where('lg.application_id', '=', loan.application_id)
+                .where('lg.deleted_at', 'is', null)
+                .orderBy('lg.guarantor_number', 'asc')
+                .execute();
+        }
+
+        // Get SACCO info for agreement header
+        const saccoConfig = await db
+            .selectFrom('sacco_configuration')
+            .select(['organization_name'])
+            .executeTakeFirst();
+
+        return c.json({
+            success: true,
+            data: {
+                organization: saccoConfig?.organization_name || 'SACCO',
+                generated_at: new Date().toISOString(),
+                parties: {
+                    borrower: {
+                        name: `${loan.first_name} ${loan.last_name}`,
+                        member_number: loan.member_number,
+                        id_number: loan.id_number,
+                        email: loan.email,
+                        phone: loan.phone_number,
+                    },
+                },
+                terms: {
+                    loan_number: loan.loan_number,
+                    product: loan.product_name,
+                    product_code: loan.product_code,
+                    approved_amount: loan.approved_amount?.toString(),
+                    interest_rate: loan.approved_interest_rate?.toString(),
+                    interest_method: loan.interest_calculation_method,
+                    tenure_months: loan.approved_tenure_months,
+                    repayment_frequency: loan.repayment_frequency,
+                    late_penalty_type: loan.late_payment_penalty_type,
+                    late_penalty: loan.late_payment_penalty?.toString(),
+                    disbursement_date: loan.disbursement_date,
+                    start_date: loan.loan_start_date,
+                    end_date: loan.loan_end_date,
+                    status: loan.status,
+                },
+                schedule: schedule.map(s => ({
+                    installment_number: s.installment_number,
+                    due_date: s.due_date,
+                    principal_payment: s.principal_payment?.toString(),
+                    interest_payment: s.interest_payment?.toString(),
+                    total_payment: s.total_payment?.toString(),
+                    closing_balance: s.closing_balance?.toString(),
+                    status: s.status,
+                })),
+                guarantors: guarantors.map(g => ({
+                    name: `${g.guarantor_first_name} ${g.guarantor_last_name}`,
+                    member_number: g.guarantor_member_number,
+                    id_number: g.guarantor_id_number,
+                    guaranteed_amount: g.guaranteed_amount?.toString(),
+                    relationship: g.relationship,
+                    consent_obtained: g.consent_obtained,
+                    contact_phone: g.contact_phone,
+                    contact_email: g.contact_email,
+                })),
+            },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// AGREEMENT SIGNING (LON-032)
+// =============================================================================
+
+const agreementSignSchema = z.object({
+    signed_by: z.string().min(1, 'Signer name is required'),
+    signature_method: z.enum(['digital', 'physical', 'biometric']),
+});
+
+/**
+ * POST /loans/:loanId/agreement/sign
+ * Record agreement signing for a loan
+ */
+loanRoutes.post('/:loanId/agreement/sign', enforcePermission('loans', 'update'), validate(agreementSignSchema), async (c) => {
+    try {
+        const { loanId } = c.req.param();
+        const data = getValidatedData<z.infer<typeof agreementSignSchema>>(c);
+        const { schema_name } = c.get('tenant')!;
+        const user = c.get('user');
+        const db = getTenantDb(schema_name);
+
+        const loanRepo = new LoanRepository(schema_name);
+        const loan = await loanRepo.findLoanById(loanId);
+        if (!loan) {
+            throw new NotFoundError('Loan', loanId);
+        }
+
+        const signedAt = new Date();
+
+        // Update loan account with signing metadata
+        await db
+            .updateTable('loan_accounts')
+            .set({
+                agreement_signed_at: signedAt as any,
+                agreement_signed_by: data.signed_by,
+                agreement_signature_method: data.signature_method as any,
+                updated_at: signedAt as any,
+            } as any)
+            .where('id', '=', loanId)
+            .execute();
+
+        // Record in audit log
+        await db
+            .insertInto('audit_log')
+            .values({
+                user_id: user!.id,
+                action: 'loan_agreement_signed' as any,
+                entity_type: 'loan_accounts' as any,
+                entity_id: loanId,
+                details: JSON.stringify({
+                    loan_number: loan.loan_number,
+                    signed_by: data.signed_by,
+                    signature_method: data.signature_method,
+                    signed_at: signedAt.toISOString(),
+                }) as any,
+                created_at: signedAt as any,
+            } as any)
+            .execute();
+
+        return c.json({
+            success: true,
+            data: {
+                loan_id: loanId,
+                loan_number: loan.loan_number,
+                signed_by: data.signed_by,
+                signature_method: data.signature_method,
+                signed_at: signedAt.toISOString(),
+            },
+            meta: { signed: true },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// GUARANTOR RECOVERY (LON-033)
+// =============================================================================
+
+const guarantorRecoverySchema = z.object({
+    guarantor_id: commonSchemas.uuid,
+    amount: z.number().positive('Recovery amount must be positive'),
+    reason: z.string().min(5, 'Reason must be at least 5 characters'),
+});
+
+/**
+ * POST /loans/:loanId/guarantor-recovery
+ * Recover overdue loan amount from a guarantor's savings
+ */
+loanRoutes.post('/:loanId/guarantor-recovery', enforcePermission('loans', 'update'), validate(guarantorRecoverySchema), async (c) => {
+    try {
+        const { loanId } = c.req.param();
+        const data = getValidatedData<z.infer<typeof guarantorRecoverySchema>>(c);
+        const { schema_name } = c.get('tenant')!;
+        const user = c.get('user');
+        const db = getTenantDb(schema_name);
+
+        const loanRepo = new LoanRepository(schema_name);
+        const accountRepo = new AccountRepository(schema_name);
+
+        // Verify loan exists
+        const loan = await loanRepo.findLoanById(loanId);
+        if (!loan) {
+            throw new NotFoundError('Loan', loanId);
+        }
+
+        // Verify guarantor exists for this loan
+        const guarantor = await db
+            .selectFrom('loan_guarantors')
+            .selectAll()
+            .where('application_id', '=', loan.application_id!)
+            .where('guarantor_id', '=', data.guarantor_id)
+            .where('deleted_at', 'is', null)
+            .executeTakeFirst();
+
+        if (!guarantor) {
+            throw new NotFoundError('Guarantor for this loan', data.guarantor_id);
+        }
+
+        // Verify guarantor has sufficient savings
+        const guarantorAccounts = await accountRepo.findAccountsByMemberId(data.guarantor_id);
+        const guarantorSavings = guarantorAccounts.reduce(
+            (sum, acc) => sum + Number(acc.principal_balance || 0), 0
+        );
+
+        if (guarantorSavings < data.amount) {
+            throw new ValidationError(
+                `Guarantor has insufficient savings balance. Available: ${guarantorSavings.toFixed(2)}, Requested: ${data.amount.toFixed(2)}`
+            );
+        }
+
+        const now = new Date();
+        const recoveryRef = `GR-${Date.now().toString(36).toUpperCase()}`;
+
+        // Find guarantor's primary savings account (first with sufficient balance)
+        const sourceAccount = guarantorAccounts.find(
+            acc => Number(acc.principal_balance || 0) >= data.amount
+        );
+
+        if (!sourceAccount) {
+            throw new ValidationError('No single savings account has sufficient balance for this recovery.');
+        }
+
+        // Create withdrawal from guarantor's savings
+        await db
+            .updateTable('savings_accounts')
+            .set({
+                principal_balance: String(Number(sourceAccount.principal_balance) - data.amount) as any,
+                updated_at: now as any,
+            } as any)
+            .where('id', '=', sourceAccount.id)
+            .execute();
+
+        // Record the savings withdrawal
+        await db
+            .insertInto('withdrawals')
+            .values({
+                savings_account_id: sourceAccount.id,
+                member_id: guarantor.guarantor_id as string,
+                amount: String(data.amount) as any,
+                withdrawal_number: recoveryRef,
+                withdrawal_date: now as any,
+                payout_method: 'internal' as any,
+                description: `Guarantor recovery for loan ${loan.loan_number}: ${data.reason}`,
+                requested_by: user!.id,
+                status: 'completed' as any,
+            } as any)
+            .execute();
+
+        // Process loan repayment
+        const repaymentService = new RepaymentService(db);
+        const repaymentResult = await repaymentService.processRepayment({
+            loanAccountId: loanId,
+            amount: data.amount,
+            paymentMethod: 'internal',
+            paymentReference: recoveryRef,
+            recordedBy: user!.id,
+        });
+
+        // Record recovery action
+        await db
+            .insertInto('loan_recovery_actions')
+            .values({
+                loan_account_id: loanId,
+                action_type: 'guarantor_recovery' as any,
+                action_date: now as any,
+                description: `Recovered ${data.amount} from guarantor savings. Reason: ${data.reason}`,
+                amount_recovered: String(data.amount) as any,
+                status: 'completed' as any,
+                created_by: user!.id,
+            } as any)
+            .execute();
+
+        return c.json({
+            success: true,
+            data: {
+                loan_id: loanId,
+                loan_number: loan.loan_number,
+                guarantor_id: data.guarantor_id,
+                recovery_amount: data.amount,
+                recovery_reference: recoveryRef,
+                reason: data.reason,
+                source_account_id: sourceAccount.id,
+                guarantor_remaining_balance: Number(sourceAccount.principal_balance) - data.amount,
+                repayment: {
+                    repayment_id: repaymentResult.repaymentId,
+                    allocated_principal: repaymentResult.allocatedPrincipal.toString(),
+                    allocated_interest: repaymentResult.allocatedInterest.toString(),
+                    allocated_penalty: repaymentResult.allocatedPenalty.toString(),
+                    remaining_loan_balance: repaymentResult.remainingBalance.toString(),
+                    loan_fully_repaid: repaymentResult.loanFullyRepaid,
+                },
+                recovered_at: now.toISOString(),
+            },
+            meta: { recovered: true },
         }, 201);
     } catch (error) {
         throw error;

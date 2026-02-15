@@ -110,6 +110,48 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
         { resource: 'withdrawals', action: 'approve' },
         { resource: 'transfers', action: 'create' },
         { resource: 'transfers', action: 'read' },
+        // Messaging
+        { resource: 'messaging', action: 'create' },
+        { resource: 'messaging', action: 'read' },
+        { resource: 'messaging', action: 'update' },
+        { resource: 'messaging', action: 'delete' },
+        { resource: 'messaging', action: 'approve' },
+        // Audit
+        { resource: 'audit_logs', action: 'read' },
+        // Beneficiaries
+        { resource: 'beneficiaries', action: 'create' },
+        { resource: 'beneficiaries', action: 'read' },
+        { resource: 'beneficiaries', action: 'update' },
+        { resource: 'beneficiaries', action: 'delete' },
+        // Standing Instructions
+        { resource: 'standing_instructions', action: 'create' },
+        { resource: 'standing_instructions', action: 'read' },
+        { resource: 'standing_instructions', action: 'update' },
+        { resource: 'standing_instructions', action: 'delete' },
+        // Account Liens
+        { resource: 'account_liens', action: 'create' },
+        { resource: 'account_liens', action: 'read' },
+        { resource: 'account_liens', action: 'update' },
+        { resource: 'account_liens', action: 'delete' },
+        // Member Credentials
+        { resource: 'member_credentials', action: 'create' },
+        { resource: 'member_credentials', action: 'read' },
+        { resource: 'member_credentials', action: 'update' },
+        // Configuration & Admin
+        { resource: 'configuration', action: 'create' },
+        { resource: 'configuration', action: 'read' },
+        { resource: 'configuration', action: 'update' },
+        { resource: 'configuration', action: 'delete' },
+        { resource: 'fee_schedules', action: 'create' },
+        { resource: 'fee_schedules', action: 'read' },
+        { resource: 'fee_schedules', action: 'update' },
+        { resource: 'fee_schedules', action: 'delete' },
+        { resource: 'transaction_limits', action: 'create' },
+        { resource: 'transaction_limits', action: 'read' },
+        { resource: 'transaction_limits', action: 'update' },
+        { resource: 'transaction_limits', action: 'delete' },
+        { resource: 'transactions', action: 'update' },
+        { resource: 'transactions', action: 'approve' },
     ],
     [UserRole.TELLER]: [
         { resource: 'members', action: 'read' },
@@ -128,6 +170,17 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
         { resource: 'fixed_deposits', action: 'create' },
         { resource: 'fixed_deposits', action: 'read' },
         { resource: 'reports', action: 'read' },
+        // Messaging
+        { resource: 'messaging', action: 'create' },
+        { resource: 'messaging', action: 'read' },
+        // Beneficiaries
+        { resource: 'beneficiaries', action: 'create' },
+        { resource: 'beneficiaries', action: 'read' },
+        // Standing Instructions
+        { resource: 'standing_instructions', action: 'create' },
+        { resource: 'standing_instructions', action: 'read' },
+        // Account Liens
+        { resource: 'account_liens', action: 'read' },
     ],
     [UserRole.LOAN_OFFICER]: [
         { resource: 'members', action: 'read' },
@@ -142,6 +195,9 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
         { resource: 'repayments', action: 'create' },
         { resource: 'repayments', action: 'read' },
         { resource: 'reports', action: 'read' },
+        // Account Liens (for loan collateral)
+        { resource: 'account_liens', action: 'create' },
+        { resource: 'account_liens', action: 'read' },
     ],
     [UserRole.ACCOUNTANT]: [
         { resource: 'members', action: 'read' },
@@ -173,6 +229,13 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
         { resource: 'journal_entries', action: 'read' },
         { resource: 'reports', action: 'read' },
         { resource: 'reports', action: 'export' },
+        // Additional read-only access
+        { resource: 'messaging', action: 'read' },
+        { resource: 'beneficiaries', action: 'read' },
+        { resource: 'account_liens', action: 'read' },
+        { resource: 'fee_schedules', action: 'read' },
+        { resource: 'transaction_limits', action: 'read' },
+        { resource: 'configuration', action: 'read' },
     ],
     [UserRole.MEMBER]: [
         { resource: 'accounts', action: 'read' }, // Own accounts only
@@ -187,6 +250,9 @@ const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
         { resource: 'fixed_deposits', action: 'read' }, // Own FDs
         { resource: 'statements', action: 'read' }, // Own statements
         { resource: 'statements', action: 'export' }, // Download own statements
+        // Own beneficiaries & standing instructions
+        { resource: 'beneficiaries', action: 'read' },
+        { resource: 'standing_instructions', action: 'read' },
     ],
     [UserRole.AGENT]: [
         { resource: 'members', action: 'read' },

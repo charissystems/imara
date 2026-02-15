@@ -1,106 +1,158 @@
 <mxfile host="65bd71144e">
     <diagram name="SACCO Multi-Tenant Architecture" id="sacco-arch">
-        <mxGraphModel dx="1139" dy="877" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+        <mxGraphModel dx="1600" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">
             <root>
                 <mxCell id="0"/>
                 <mxCell id="1" parent="0"/>
-                <mxCell id="app-layer" value="Application Server (Node.js / Kysely)" style="swimlane;fontStyle=1;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontFamily=Comic Sans MS;" parent="1" vertex="1">
-                    <mxGeometry x="40" y="70" width="300" height="160" as="geometry"/>
+
+                <mxCell id="client" value="Client / Browser" style="whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontStyle=1;rounded=0;arcSize=0;fontFamily=Comic Sans MS;" parent="1" vertex="1">
+                    <mxGeometry x="150" y="-80" width="160" height="30" as="geometry"/>
                 </mxCell>
-                <mxCell id="middleware" value="Middleware&#xa;(Subdomain Resolver)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;arcSize=0;fontFamily=Comic Sans MS;" parent="app-layer" vertex="1">
-                    <mxGeometry y="26" width="300" height="40" as="geometry"/>
+
+                <mxCell id="app-layer" value="Application Server (Hono / Node.js / TypeScript)" style="swimlane;fontStyle=1;childLayout=stackLayout;horizontal=1;startSize=28;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontFamily=Comic Sans MS;rounded=0;arcSize=0;" parent="1" vertex="1">
+                    <mxGeometry x="30" y="-10" width="400" height="290" as="geometry"/>
                 </mxCell>
-                <mxCell id="service-layer" value="Services (Business Logic)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;arcSize=0;fontFamily=Comic Sans MS;" parent="app-layer" vertex="1">
-                    <mxGeometry y="66" width="300" height="34" as="geometry"/>
+                <mxCell id="middleware" value="&lt;b&gt;Middleware Pipeline&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Logger &#8594; RequestCtx &#8594; CORS &#8594; TenantResolver &#8594; SchemaCtx&lt;br&gt;&#8594; Audit &#8594; Auth (JWT) &#8594; RBAC &#8594; SubscriptionValidation &#8594; Zod Validation&lt;/font&gt;" style="whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;rounded=0;arcSize=0;fontFamily=Comic Sans MS;fontSize=10;verticalAlign=middle;" parent="app-layer" vertex="1">
+                    <mxGeometry y="28" width="400" height="52" as="geometry"/>
                 </mxCell>
-                <mxCell id="repo-layer" value="Repositories (Data Access)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;arcSize=0;fontFamily=Comic Sans MS;" parent="app-layer" vertex="1">
-                    <mxGeometry y="100" width="300" height="30" as="geometry"/>
+                <mxCell id="routes" value="&lt;b&gt;Route Modules&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;/super-admin &#8226; /auth &#8226; /admin &#8226; /members &#8226; /accounts&lt;br&gt;/loans &#8226; /shares &#8226; /fixed-deposits &#8226; /reports &#8226; /accounting&lt;/font&gt;" style="whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;rounded=0;arcSize=0;fontFamily=Comic Sans MS;fontSize=10;verticalAlign=middle;" parent="app-layer" vertex="1">
+                    <mxGeometry y="80" width="400" height="50" as="geometry"/>
                 </mxCell>
-                <mxCell id="db-client" value="Kysely &amp; PG Pool" style="cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#d5e8d4;strokeColor=#82b366;fontFamily=Comic Sans MS;" parent="app-layer" vertex="1">
-                    <mxGeometry y="130" width="300" height="30" as="geometry"/>
+                <mxCell id="services" value="&lt;b&gt;Service Layer (Business Logic)&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Auth &#8226; Member &#8226; Savings &#8226; Loan &#8226; Repayment &#8226; ScheduleCalc&lt;br&gt;Share &#8226; FixedDeposit &#8226; Accounting &#8226; Reporting &#8226; InterestAccrual&lt;br&gt;Export &#8226; Email &#8226; Notification &#8226; 2FA &#8226; PasswordReset &#8226; Tenant &#8226; Backup&lt;/font&gt;" style="whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;rounded=0;arcSize=0;fontFamily=Comic Sans MS;fontSize=10;verticalAlign=middle;" parent="app-layer" vertex="1">
+                    <mxGeometry y="130" width="400" height="68" as="geometry"/>
                 </mxCell>
-                <mxCell id="db-layer" value="PostgreSQL Database" style="swimlane;fontStyle=1;childLayout=stackLayout;horizontal=1;startSize=26;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontFamily=Comic Sans MS;" parent="1" vertex="1">
-                    <mxGeometry x="480" y="40" width="600" height="560" as="geometry">
-                        <mxRectangle x="480" y="40" width="160" height="30" as="alternateBounds"/>
+                <mxCell id="repos" value="&lt;b&gt;Repository Layer (Data Access)&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:9px&quot;&gt;Base &#8226; Auth &#8226; Staff &#8226; Member &#8226; Document &#8226; Account&lt;br&gt;Loan &#8226; Share &#8226; Reporting &#8226; Tenant &#8226; Transaction&lt;/font&gt;" style="whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;rounded=0;arcSize=0;fontFamily=Comic Sans MS;fontSize=10;verticalAlign=middle;" parent="app-layer" vertex="1">
+                    <mxGeometry y="198" width="400" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="db-client" value="Kysely ORM &amp; PG Connection Pool" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=10;fillColor=#d5e8d4;strokeColor=#82b366;fontFamily=Comic Sans MS;fontSize=10;" parent="app-layer" vertex="1">
+                    <mxGeometry y="248" width="400" height="42" as="geometry"/>
+                </mxCell>
+
+                <mxCell id="scheduler" value="&lt;b&gt;Job Scheduler (BullMQ)&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;interest_accrual (daily 01:00)&lt;br&gt;interest_posting (monthly 02:00)&lt;br&gt;penalty_calculation (daily 03:00)&lt;br&gt;npl_flagging (daily 04:00)&lt;br&gt;repayment_reminders (daily 07:00)&lt;br&gt;fd_maturity_check (daily 05:00)&lt;br&gt;fd_interest_accrual (daily 01:30)&lt;/font&gt;" style="whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;rounded=0;arcSize=0;fontFamily=Comic Sans MS;fontSize=10;verticalAlign=top;" parent="1" vertex="1">
+                    <mxGeometry x="30" y="330" width="195" height="170" as="geometry"/>
+                </mxCell>
+
+                <mxCell id="redis" value="Redis (IORedis)" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=10;fillColor=#f8cecc;strokeColor=#b85450;fontFamily=Comic Sans MS;fontSize=10;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="65" y="545" width="130" height="50" as="geometry"/>
+                </mxCell>
+
+                <mxCell id="ext-services" value="&lt;b&gt;External Integrations&lt;/b&gt;" style="swimlane;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontFamily=Comic Sans MS;fontSize=10;rounded=0;arcSize=0;startSize=22;" parent="1" vertex="1">
+                    <mxGeometry x="255" y="330" width="175" height="170" as="geometry"/>
+                </mxCell>
+                <mxCell id="ext-email" value="Email&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;Nodemailer&lt;br&gt;SendGrid / AWS SES&lt;br&gt;Mailgun / SMTP&lt;/font&gt;" style="whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;rounded=0;arcSize=0;fontFamily=Comic Sans MS;fontSize=9;verticalAlign=middle;" parent="ext-services" vertex="1">
+                    <mxGeometry x="10" y="28" width="155" height="42" as="geometry"/>
+                </mxCell>
+                <mxCell id="ext-sms" value="SMS Gateway&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;Africa's Talking / Twilio / Nexmo&lt;/font&gt;" style="whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;rounded=0;arcSize=0;fontFamily=Comic Sans MS;fontSize=9;verticalAlign=middle;" parent="ext-services" vertex="1">
+                    <mxGeometry x="10" y="78" width="155" height="38" as="geometry"/>
+                </mxCell>
+                <mxCell id="ext-momo" value="Mobile Money&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;MTN MoMo / Airtel Money&lt;/font&gt;" style="whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;rounded=0;arcSize=0;fontFamily=Comic Sans MS;fontSize=9;verticalAlign=middle;" parent="ext-services" vertex="1">
+                    <mxGeometry x="10" y="124" width="155" height="38" as="geometry"/>
+                </mxCell>
+
+                <mxCell id="db-layer" value="PostgreSQL 16+ Database" style="swimlane;fontStyle=1;childLayout=stackLayout;horizontal=1;startSize=28;horizontalStack=0;resizeParent=1;resizeParentMax=0;resizeLast=0;collapsible=1;marginBottom=0;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontFamily=Comic Sans MS;rounded=0;arcSize=0;" parent="1" vertex="1">
+                    <mxGeometry x="500" y="-50" width="880" height="640" as="geometry">
+                        <mxRectangle x="500" y="-50" width="200" height="28" as="alternateBounds"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="public-schema" value="public Schema (Global Registry)" style="swimlane;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontFamily=Comic Sans MS;" parent="db-layer" vertex="1">
-                    <mxGeometry y="26" width="600" height="174" as="geometry">
-                        <mxRectangle y="26" width="600" height="30" as="alternateBounds"/>
+
+                <mxCell id="public-schema" value="public Schema (Global Registry &amp; Platform Infrastructure)" style="swimlane;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;fontFamily=Comic Sans MS;rounded=0;arcSize=0;fontSize=10;" parent="db-layer" vertex="1">
+                    <mxGeometry y="28" width="880" height="152" as="geometry">
+                        <mxRectangle y="28" width="880" height="24" as="alternateBounds"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="table-tenants" value="tenants (Registry)&#xa;- subdomain&#xa;- schema_name&#xa;- is_active" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=6.443237304687443;fillColor=#ffffff;strokeColor=#666666;fontColor=#333333;fontFamily=Comic Sans MS;" parent="public-schema" vertex="1">
-                    <mxGeometry x="60" y="40" width="200" height="120" as="geometry"/>
+                <mxCell id="table-tenants" value="&lt;b&gt;tenants&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;subdomain&lt;br&gt;schema_name&lt;br&gt;subscription_tier&lt;br&gt;status &#8226; branding&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=6;fillColor=#ffffff;strokeColor=#666666;fontColor=#333333;fontFamily=Comic Sans MS;fontSize=9;" parent="public-schema" vertex="1">
+                    <mxGeometry x="15" y="30" width="140" height="110" as="geometry"/>
                 </mxCell>
-                <mxCell id="table-migrations" value="tenant_migrations&#xa;(Tracking)" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=6.4432095614344576;fillColor=#ffffff;strokeColor=#666666;fontColor=#333333;fontFamily=Comic Sans MS;" parent="public-schema" vertex="1">
-                    <mxGeometry x="340" y="40" width="200" height="120" as="geometry"/>
+                <mxCell id="table-currencies" value="&lt;b&gt;currencies&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;code &#8226; name&lt;br&gt;symbol&lt;br&gt;decimal_places&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=6;fillColor=#ffffff;strokeColor=#666666;fontColor=#333333;fontFamily=Comic Sans MS;fontSize=9;" parent="public-schema" vertex="1">
+                    <mxGeometry x="175" y="30" width="120" height="110" as="geometry"/>
                 </mxCell>
-                <mxCell id="tenant-schema" value="tenant_xxx Schema (Isolated)" style="swimlane;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontFamily=Comic Sans MS;" parent="db-layer" vertex="1">
-                    <mxGeometry y="200" width="600" height="360" as="geometry"/>
+                <mxCell id="table-migrations" value="&lt;b&gt;tenant_migrations&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;tenant_id FK&lt;br&gt;migration_name&lt;br&gt;migration_version&lt;br&gt;applied_at&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=6;fillColor=#ffffff;strokeColor=#666666;fontColor=#333333;fontFamily=Comic Sans MS;fontSize=9;" parent="public-schema" vertex="1">
+                    <mxGeometry x="315" y="30" width="140" height="110" as="geometry"/>
                 </mxCell>
-                <mxCell id="table-persons" value="persons&#xa;(Identity)" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=7.425023859197324;fillColor=#ffffff;strokeColor=#d6b656;fontFamily=Comic Sans MS;" parent="tenant-schema" vertex="1">
-                    <mxGeometry x="160" y="40" width="140" height="70" as="geometry"/>
+                <mxCell id="table-audit-log" value="&lt;b&gt;tenant_audit_log&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;schema_name&lt;br&gt;operation&lt;br&gt;performed_by&lt;/font&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=6;fillColor=#ffffff;strokeColor=#666666;fontColor=#333333;fontFamily=Comic Sans MS;fontSize=9;" parent="public-schema" vertex="1">
+                    <mxGeometry x="475" y="30" width="130" height="110" as="geometry"/>
                 </mxCell>
-                <mxCell id="table-members" value="members&#xa;(person_id FK)" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=6.17680576869418;fillColor=#ffffff;strokeColor=#d6b656;fontFamily=Comic Sans MS;" parent="tenant-schema" vertex="1">
-                    <mxGeometry x="55" y="230" width="100" height="70" as="geometry"/>
+                <mxCell id="table-tenant-ops" value="&lt;b&gt;Platform Ops&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;tenant_backups&lt;br&gt;tenant_resource_usage&lt;br&gt;tenant_feature_usage&lt;br&gt;tenant_retention_policies&lt;br&gt;tenant_setup_checklist&lt;br&gt;tenant_purge_log&lt;/font&gt;" style="whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#666666;fontColor=#333333;fontFamily=Comic Sans MS;fontSize=9;rounded=0;arcSize=0;verticalAlign=top;" parent="public-schema" vertex="1">
+                    <mxGeometry x="625" y="30" width="240" height="110" as="geometry"/>
                 </mxCell>
-                <mxCell id="table-staff" value="staff&#xa;(person_id FK)&#xa;(role_id FK)" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=5.712217388731062;fillColor=#ffffff;strokeColor=#d6b656;fontFamily=Comic Sans MS;" parent="tenant-schema" vertex="1">
-                    <mxGeometry x="340" y="230" width="100" height="70" as="geometry"/>
+
+                <mxCell id="tenant-schema" value="tenant_xxx Schema (Isolated per SACCO &#8212; cloned from template)" style="swimlane;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontFamily=Comic Sans MS;rounded=0;arcSize=0;fontSize=10;" parent="db-layer" vertex="1">
+                    <mxGeometry y="180" width="880" height="460" as="geometry"/>
                 </mxCell>
-                <mxCell id="table-roles" value="roles" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=5.712217388731062;fillColor=#ffffff;strokeColor=#d6b656;fontFamily=Comic Sans MS;" parent="tenant-schema" vertex="1">
-                    <mxGeometry x="480" y="230" width="100" height="70" as="geometry"/>
+
+                <mxCell id="mod-auth" value="&lt;b&gt;Auth &amp; Security&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;staff &#8226; staff_credentials&lt;br&gt;roles &#8226; permissions &#8226; role_permissions&lt;br&gt;audit_log &#8226; activity_log&lt;br&gt;security_events &#8226; two_factor_log&lt;br&gt;permission_audit &#8226; api_access_log&lt;/font&gt;" style="whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontFamily=Comic Sans MS;fontSize=9;rounded=0;arcSize=0;verticalAlign=top;" parent="tenant-schema" vertex="1">
+                    <mxGeometry x="10" y="30" width="275" height="120" as="geometry"/>
                 </mxCell>
-                <mxCell id="table-docs" value="identity_documents&lt;div&gt;person_id FK&lt;/div&gt;" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=8.73418634588046;fillColor=#ffffff;strokeColor=#d6b656;fontFamily=Comic Sans MS;" parent="tenant-schema" vertex="1">
-                    <mxGeometry x="380" y="40" width="120" height="70" as="geometry"/>
+                <mxCell id="mod-members" value="&lt;b&gt;Member Management&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;members&lt;br&gt;identity_documents&lt;br&gt;memberships&lt;br&gt;member_accounts&lt;br&gt;(savings / shares / FD / loans balances)&lt;/font&gt;" style="whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontFamily=Comic Sans MS;fontSize=9;rounded=0;arcSize=0;verticalAlign=top;" parent="tenant-schema" vertex="1">
+                    <mxGeometry x="300" y="30" width="265" height="120" as="geometry"/>
                 </mxCell>
-                <mxCell id="2" style="edgeStyle=none;html=1;entryX=1;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;" parent="tenant-schema" source="table-persons" target="table-members" edge="1">
+                <mxCell id="mod-savings" value="&lt;b&gt;Savings &amp; Deposits&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;savings_products&lt;br&gt;savings_accounts&lt;br&gt;deposits &#8226; withdrawals&lt;br&gt;internal_transfers&lt;br&gt;interest_schedules&lt;/font&gt;" style="whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontFamily=Comic Sans MS;fontSize=9;rounded=0;arcSize=0;verticalAlign=top;" parent="tenant-schema" vertex="1">
+                    <mxGeometry x="580" y="30" width="285" height="120" as="geometry"/>
+                </mxCell>
+
+                <mxCell id="mod-loans" value="&lt;b&gt;Loan Management&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;loan_products&lt;br&gt;loan_applications &#8226; loan_appraisals&lt;br&gt;loan_guarantors&lt;br&gt;loan_accounts &#8226; loan_schedules&lt;br&gt;loan_repayments &#8226; loan_recovery_actions&lt;/font&gt;" style="whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontFamily=Comic Sans MS;fontSize=9;rounded=0;arcSize=0;verticalAlign=top;" parent="tenant-schema" vertex="1">
+                    <mxGeometry x="10" y="165" width="275" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="mod-shares" value="&lt;b&gt;Share Capital&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;share_classes&lt;br&gt;share_holdings&lt;br&gt;share_transactions&lt;br&gt;dividend_declarations&lt;br&gt;share_register&lt;/font&gt;" style="whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontFamily=Comic Sans MS;fontSize=9;rounded=0;arcSize=0;verticalAlign=top;" parent="tenant-schema" vertex="1">
+                    <mxGeometry x="300" y="165" width="265" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="mod-fd" value="&lt;b&gt;Fixed Deposits&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;fixed_deposit_products&lt;br&gt;fixed_deposits&lt;br&gt;fd_interest_schedules&lt;br&gt;fd_maturity_alerts&lt;br&gt;fd_rollovers&lt;/font&gt;" style="whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontFamily=Comic Sans MS;fontSize=9;rounded=0;arcSize=0;verticalAlign=top;" parent="tenant-schema" vertex="1">
+                    <mxGeometry x="580" y="165" width="285" height="120" as="geometry"/>
+                </mxCell>
+
+                <mxCell id="mod-accounting" value="&lt;b&gt;Accounting (Double-Entry GL)&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;accounts (chart of accounts)&lt;br&gt;transactions (debit/credit journal)&lt;br&gt;financial_periods&lt;br&gt;manual_journal_entries &#8226; journal_lines&lt;br&gt;budgets &#8226; budget_lines &#8226; trial_balance&lt;/font&gt;" style="whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontFamily=Comic Sans MS;fontSize=9;rounded=0;arcSize=0;verticalAlign=top;" parent="tenant-schema" vertex="1">
+                    <mxGeometry x="10" y="300" width="275" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="mod-messaging" value="&lt;b&gt;Messaging &amp; Notifications&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;message_templates&lt;br&gt;messages &#8226; message_delivery_log&lt;br&gt;bulk_campaigns &#8226; campaign_messages&lt;br&gt;communication_preferences&lt;/font&gt;" style="whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontFamily=Comic Sans MS;fontSize=9;rounded=0;arcSize=0;verticalAlign=top;" parent="tenant-schema" vertex="1">
+                    <mxGeometry x="300" y="300" width="265" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="mod-config" value="&lt;b&gt;System Configuration&lt;/b&gt;&lt;br&gt;&lt;font style=&quot;font-size:8px&quot;&gt;sacco_configuration &#8226; branches&lt;br&gt;system_settings&lt;br&gt;email / sms / mobile_money gateways&lt;br&gt;notification_settings&lt;br&gt;interest_rate / penalty config&lt;br&gt;scheduled_tasks &#8226; task_logs&lt;/font&gt;" style="whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#d6b656;fontFamily=Comic Sans MS;fontSize=9;rounded=0;arcSize=0;verticalAlign=top;" parent="tenant-schema" vertex="1">
+                    <mxGeometry x="580" y="300" width="285" height="120" as="geometry"/>
+                </mxCell>
+
+                <mxCell id="mod-recon" value="&lt;font style=&quot;font-size:8px&quot;&gt;+ reconciliation_audit &#8226; unmatched_reconciliation_items &#8226; data_export_log&lt;/font&gt;" style="whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontFamily=Comic Sans MS;fontSize=8;rounded=0;arcSize=0;verticalAlign=middle;" parent="tenant-schema" vertex="1">
+                    <mxGeometry x="10" y="430" width="855" height="22" as="geometry"/>
+                </mxCell>
+
+
+                <mxCell id="edge-client" value="Request (subdomain)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#000000;entryX=0.5;entryY=0;entryDx=0;entryDy=0;labelBackgroundColor=none;fontFamily=Comic Sans MS;fontStyle=0;fontSize=9;" parent="1" source="client" target="app-layer" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+
+                <mxCell id="edge-lookup" value="1. Lookup Schema" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#d6b656;fontFamily=Comic Sans MS;labelBackgroundColor=none;fontSize=9;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;" parent="1" source="middleware" target="table-tenants" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+
+                <mxCell id="edge-verify" value="2. Verify Tenant" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#82b366;fontFamily=Comic Sans MS;labelBackgroundColor=none;fontSize=9;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;" parent="1" source="db-client" target="table-tenants" edge="1">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+
+                <mxCell id="edge-query" value="3. SET search_path&#xa;4. Execute Query" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#d6b656;fontFamily=Comic Sans MS;labelBackgroundColor=none;fontSize=9;entryX=0;entryY=0.4;entryDx=0;entryDy=0;" parent="1" source="db-client" target="tenant-schema" edge="1">
                     <mxGeometry relative="1" as="geometry">
                         <Array as="points">
-                            <mxPoint x="230" y="265"/>
+                            <mxPoint x="230" y="470"/>
+                            <mxPoint x="470" y="470"/>
+                            <mxPoint x="470" y="314"/>
                         </Array>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="4" style="edgeStyle=none;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;" parent="tenant-schema" source="table-persons" target="table-staff" edge="1">
-                    <mxGeometry relative="1" as="geometry">
-                        <Array as="points">
-                            <mxPoint x="230" y="265"/>
-                        </Array>
-                    </mxGeometry>
-                </mxCell>
-                <mxCell id="5" style="edgeStyle=none;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;entryPerimeter=0;" parent="tenant-schema" source="table-persons" target="table-docs" edge="1">
+
+                <mxCell id="edge-jobs" value="Scheduled Jobs" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#666666;fontFamily=Comic Sans MS;labelBackgroundColor=none;fontSize=9;exitX=0.25;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=1;" parent="1" source="app-layer" target="scheduler" edge="1">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
-                <mxCell id="edge-client" value="Request (subdomain)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#000000;entryX=0.5;entryY=0;entryDx=0;entryDy=0;labelBackgroundColor=none;fontFamily=Comic Sans MS;fontStyle=0;align=center;labelPosition=center;verticalLabelPosition=middle;verticalAlign=middle;" parent="1" source="client" target="app-layer" edge="1">
-                    <mxGeometry relative="1" as="geometry">
-                        <mxPoint x="240" y="40" as="targetPoint"/>
-                        <Array as="points">
-                            <mxPoint x="190" y="10"/>
-                            <mxPoint x="190" y="10"/>
-                        </Array>
-                    </mxGeometry>
-                </mxCell>
-                <mxCell id="client" value="Client / Browser" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#000000;fontStyle=1;arcSize=0;fontFamily=Comic Sans MS;" parent="1" vertex="1">
-                    <mxGeometry x="130" y="-90" width="120" height="30" as="geometry"/>
-                </mxCell>
-                <mxCell id="edge-middleware" value="1. Lookup Schema" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=#d6b656;fontFamily=Comic Sans MS;labelBackgroundColor=none;" parent="1" source="middleware" target="table-tenants" edge="1">
+
+                <mxCell id="edge-redis" value="Queue Mgmt" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#b85450;fontFamily=Comic Sans MS;labelBackgroundColor=none;fontSize=9;strokeWidth=2;" parent="1" source="scheduler" target="redis" edge="1">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
-                <mxCell id="edge-client-public" value="2. Verify Tenant" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=#82b366;fontFamily=Comic Sans MS;labelBackgroundColor=none;" parent="1" source="db-client" target="table-tenants" edge="1">
+
+                <mxCell id="edge-ext" value="Notifications" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#d6b656;fontFamily=Comic Sans MS;labelBackgroundColor=none;fontSize=9;exitX=0.75;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;dashed=1;" parent="1" source="app-layer" target="ext-services" edge="1">
                     <mxGeometry relative="1" as="geometry"/>
                 </mxCell>
-                <mxCell id="edge-client-tenant" value="3. Set search_path &#xa;   &#xa;   &#xa;4. Execute Query" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#d6b656;fontFamily=Comic Sans MS;labelBackgroundColor=none;entryX=-0.003;entryY=0.58;entryDx=0;entryDy=0;entryPerimeter=0;" parent="1" source="db-client" target="table-members" edge="1">
-                    <mxGeometry x="0.3016" relative="1" as="geometry">
-                        <Array as="points">
-                            <mxPoint x="190" y="510"/>
-                            <mxPoint x="535" y="510"/>
-                        </Array>
-                        <mxPoint x="535" y="510" as="targetPoint"/>
-                        <mxPoint as="offset"/>
-                    </mxGeometry>
+
+                <mxCell id="db-functions" value="&lt;font style=&quot;font-size:8px&quot;&gt;&lt;b&gt;Key DB Functions:&lt;/b&gt; create_tenant_schema() &#8226; create_tenant_with_security() &#8226; drop_tenant_schema() &#8226; backup_tenant_schema()&lt;/font&gt;" style="whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#999999;fontFamily=Comic Sans MS;fontSize=8;rounded=0;arcSize=0;verticalAlign=middle;dashed=1;" parent="1" vertex="1">
+                    <mxGeometry x="500" y="600" width="880" height="24" as="geometry"/>
                 </mxCell>
-                <mxCell id="rel-staff-roles" style="edgeStyle=entityRelationEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;exitX=1;exitY=0.5;exitDx=0;exitDy=0;fontFamily=Comic Sans MS;" parent="1" source="table-staff" target="table-roles" edge="1">
-                    <mxGeometry relative="1" as="geometry"/>
-                </mxCell>
+
             </root>
         </mxGraphModel>
     </diagram>
