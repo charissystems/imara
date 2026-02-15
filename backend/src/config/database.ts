@@ -1,4 +1,4 @@
-import { Pool, QueryResult } from 'pg';
+import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { Kysely, PostgresDialect, LogEvent } from 'kysely';
 import { Database, TenantDatabase } from '../database/types';
 
@@ -121,9 +121,10 @@ export class DatabaseManager {
     }
 
     /**
-     * Execute raw SQL query
+     * Execute raw SQL query with proper search_path isolation.
+     * Resets search_path before releasing the connection back to the pool.
      */
-    async executeRaw<T = any>(
+    async executeRaw<T extends QueryResultRow = any>(
         schemaName: string | 'public',
         queryText: string,
         parameters?: any[]
@@ -140,6 +141,54 @@ export class DatabaseManager {
             console.log(`📄 [RAW SQL]: ${result.rowCount} rows affected`);
             return result;
         } finally {
+            // Always reset search_path before releasing to prevent cross-tenant leakage
+            try {
+                await client.query('RESET search_path');
+                await client.query('RESET ROLE');
+            } catch {
+                // Swallow reset errors — connection may be broken
+            }
+            client.release();
+        }
+    }
+
+    /**
+     * Borrow a pool connection with tenant role + search_path activated.
+     *
+     * Sets:
+     *  - `SET ROLE <schema>_role`  (PG enforces permissions for that role)
+     *  - `SET search_path TO "<schema>", public`
+     *  - `SET app.current_tenant = '<schema>'`  (visible to RLS policies)
+     *
+     * The callback receives the `PoolClient`; on return (or throw) the session
+     * is reset (`RESET ROLE; RESET search_path; RESET app.current_tenant`) and
+     * the connection is released back to the pool.
+     */
+    async withSecureTenantConnection<T>(
+        schemaName: string,
+        callback: (client: PoolClient) => Promise<T>,
+    ): Promise<T> {
+        const safeName = schemaName.replace(/[^a-zA-Z0-9_]/g, '');
+        const roleName = `${safeName}_role`;
+        const client = await this.pool.connect();
+
+        try {
+            // Set tenant role (DB-level permission guard)
+            await client.query(`SET ROLE "${roleName}"`);
+            // Pin search_path so unqualified table names resolve to this tenant
+            await client.query(`SET search_path TO "${safeName}", public`);
+            // Application-level variable readable by RLS policies via current_setting()
+            await client.query(`SET app.current_tenant = '${safeName}'`);
+
+            return await callback(client);
+        } finally {
+            try {
+                await client.query('RESET ROLE');
+                await client.query('RESET search_path');
+                await client.query("SET app.current_tenant = ''");
+            } catch {
+                // Connection may be broken; nothing more we can do
+            }
             client.release();
         }
     }

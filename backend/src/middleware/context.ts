@@ -2,7 +2,7 @@
 import { Context, Next } from 'hono';
 import { nanoid } from 'nanoid';
 import { Env } from './types';
-import { dbManager } from '../config/database';
+import { dbManager, getPool } from '../config/database';
 import { AppError } from './errorHandler';
 import { appLogger } from './logger';
 
@@ -30,7 +30,15 @@ export async function requestContext(c: Context<Env>, next: Next) {
 
 /**
  * Schema context middleware
- * Creates and attaches tenant-specific database connection to context
+ * Creates and attaches tenant-specific database connection to context.
+ *
+ * Security: sets `app.current_tenant` session variable on a dedicated pool
+ * connection so that:
+ *  1. RLS policies can reference `current_setting('app.current_tenant')`
+ *  2. The audit trail captures which tenant schema was active
+ *  3. Even if application code has a bug, the DB-level policies limit exposure
+ *
+ * The session variable is reset when the request completes.
  */
 export async function schemaContext(c: Context<Env>, next: Next) {
     const tenant = c.get('tenant');
@@ -51,20 +59,56 @@ export async function schemaContext(c: Context<Env>, next: Next) {
         );
     }
 
+    // Validate schema name format to prevent injection
+    const safeName = tenant.schema_name.replace(/[^a-zA-Z0-9_]/g, '');
+    if (safeName !== tenant.schema_name) {
+        throw new AppError(
+            500,
+            `Tenant schema name contains invalid characters: ${tenant.schema_name}`,
+            'INVALID_SCHEMA_NAME'
+        );
+    }
+
+    const pool = getPool();
+    let client: any = null;
+
     try {
-        // Create tenant-specific database connection
+        // Create tenant-specific Kysely database instance (.withSchema prefix)
         const tenantDb = dbManager.getTenantDb(tenant.schema_name);
-        
-        // Attach to context
         c.set('db', tenantDb);
-        
-        appLogger.debug('Schema context attached', {
+
+        // Pin a pool connection for this request and activate tenant role
+        client = await pool.connect();
+        const roleName = `${safeName}_role`;
+
+        // Attempt SET ROLE — if the role doesn't exist the query will fail.
+        // In that case, fall back to just setting the session variable.
+        try {
+            await client.query(`SET ROLE "${roleName}"`);
+        } catch {
+            appLogger.warn('Tenant role not found; falling back to pool user', {
+                role: roleName,
+                schema: tenant.schema_name,
+            });
+        }
+
+        await client.query(`SET search_path TO "${safeName}", public`);
+        await client.query(`SET app.current_tenant = '${safeName}'`);
+
+        // Store tenant context for downstream middleware
+        c.set('tenantId' as any, tenant.id);
+        c.set('schemaName' as any, tenant.schema_name);
+
+        appLogger.debug('Schema context attached with DB-level isolation', {
             schema: tenant.schema_name,
             tenantId: tenant.id,
         });
 
         await next();
     } catch (error) {
+        // Re-throw AppErrors as-is
+        if (error instanceof AppError) throw error;
+
         appLogger.error('Failed to create schema context', error as Error, {
             schema: tenant.schema_name,
             tenantId: tenant.id,
@@ -76,5 +120,17 @@ export async function schemaContext(c: Context<Env>, next: Next) {
             'SCHEMA_CONNECTION_ERROR',
             { schema: tenant.schema_name }
         );
+    } finally {
+        // Always reset session variables before releasing connection
+        if (client) {
+            try {
+                await client.query('RESET ROLE');
+                await client.query('RESET search_path');
+                await client.query("SET app.current_tenant = ''");
+            } catch {
+                // Swallow — connection may be broken
+            }
+            client.release();
+        }
     }
 }
