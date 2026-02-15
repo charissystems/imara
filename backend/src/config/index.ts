@@ -4,6 +4,8 @@
  */
 
 export { dbManager, publicDb, getTenantDb, clearTenantDbCache, getPool } from './database';
+export { getCacheRedis, createBullRedisConnection, isRedisAvailable, disconnectRedis } from './redis';
+export type { RedisConfig } from './redis';
 export * from './multitenancy';
 
 /**

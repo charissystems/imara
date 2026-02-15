@@ -21,7 +21,7 @@
  */
 
 import { Queue, Worker, Job } from 'bullmq';
-import IORedis from 'ioredis';
+import { createBullRedisConnection } from '../config/redis';
 import { getTenantDb, publicDb } from '../config/database';
 import { InterestAccrualEngine } from '../services/interestAccrualService';
 import { RepaymentService } from '../services/repaymentService';
@@ -99,25 +99,7 @@ const JOB_DEFINITIONS: Record<JobType, JobDefinition> = {
     },
 };
 
-// ────────────────────────────────────────────────────────────
-// Redis Connection
-// ────────────────────────────────────────────────────────────
-
-function createRedisConnection(): IORedis {
-    const host = process.env.REDIS_HOST ?? 'localhost';
-    const port = parseInt(process.env.REDIS_PORT ?? '6379', 10);
-    const password = process.env.REDIS_PASSWORD ?? undefined;
-    const db = parseInt(process.env.REDIS_DB ?? '0', 10);
-
-    return new IORedis({
-        host,
-        port,
-        password,
-        db,
-        maxRetriesPerRequest: null, // Required by BullMQ
-        enableReadyCheck: false,
-    });
-}
+// Redis connection provided by centralized config/redis.ts
 
 // ────────────────────────────────────────────────────────────
 // Job Processor Functions
@@ -493,7 +475,7 @@ export class JobScheduler {
     private workers: Map<JobType, Worker> = new Map();
 
     constructor() {
-        this.connection = createRedisConnection();
+        this.connection = createBullRedisConnection();
     }
 
     /**

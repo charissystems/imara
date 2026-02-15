@@ -11,12 +11,12 @@
  */
 
 import { randomBytes, createHmac } from 'crypto';
-import IORedis from 'ioredis';
 import { Kysely } from 'kysely';
 import { TenantDatabase } from '../database/types';
 import { AuthRepository } from '../repositories/authRepository';
 import { AuthService } from './authService';
 import { NotificationService } from './notificationService';
+import { getCacheRedis } from '../config/redis';
 import { appLogger } from '../middleware/logger';
 
 // ────────────────────────────────────────────────────────────
@@ -49,7 +49,7 @@ const RESET_TOKEN_PREFIX = 'pwd_reset:';
 const RESET_TOKEN_TTL_SECONDS = 30 * 60; // 30 minutes
 
 export class PasswordResetService {
-    private redis: IORedis;
+    private redis: ReturnType<typeof getCacheRedis>;
     private db: Kysely<TenantDatabase>;
     private schemaName: string;
     private notificationService: NotificationService;
@@ -58,19 +58,12 @@ export class PasswordResetService {
     constructor(
         db: Kysely<TenantDatabase>,
         schemaName: string,
-        redis?: IORedis,
     ) {
         this.db = db;
         this.schemaName = schemaName;
         this.notificationService = new NotificationService(db);
         this.authService = new AuthService();
-
-        this.redis = redis || new IORedis({
-            host: process.env.REDIS_HOST ?? 'localhost',
-            port: parseInt(process.env.REDIS_PORT ?? '6379', 10),
-            password: process.env.REDIS_PASSWORD ?? undefined,
-            db: parseInt(process.env.REDIS_DB ?? '0', 10),
-        });
+        this.redis = getCacheRedis();
     }
 
     /**

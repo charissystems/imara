@@ -3,6 +3,7 @@ import 'dotenv/config';
 import app from './index';
 import { MigrationRunner } from './utils/migrationRunner';
 import { startJobScheduler, stopJobScheduler } from './jobs/scheduler';
+import { getCacheRedis, disconnectRedis } from './config/redis';
 
 const port = Number(process.env.PORT) || 3000;
 const enableScheduler = process.env.ENABLE_JOB_SCHEDULER !== 'false';
@@ -31,6 +32,14 @@ async function startServer() {
         }
     }
 
+    // Eagerly initialize cache Redis connection (non-blocking)
+    try {
+        getCacheRedis();
+        console.log('🗄️  Redis cache initializing...');
+    } catch {
+        console.warn('⚠️  Redis cache unavailable; application caching disabled');
+    }
+
     console.log(`🚀 Server starting on http://localhost:${port}`);
 
     serve({
@@ -50,6 +59,11 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
         console.log(`\n${signal} received. Shutting down gracefully...`);
         try {
             await stopJobScheduler();
+        } catch {
+            // Ignore shutdown errors
+        }
+        try {
+            await disconnectRedis();
         } catch {
             // Ignore shutdown errors
         }
