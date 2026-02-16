@@ -867,27 +867,26 @@ shareRoutes.get('/purchases/:purchaseId', async (c) => {
         const db = c.get('db')!;
 
         const purchase = await db
-            .selectFrom('share_purchases as sp')
-            .innerJoin('share_classes as sc', 'sc.id', 'sp.share_class_id')
-            .innerJoin('members as m', 'm.id', 'sp.member_id')
+            .selectFrom('share_transactions as st')
+            .innerJoin('share_classes as sc', 'sc.id', 'st.share_class_id')
+            .innerJoin('members as m', 'm.id', 'st.member_id')
             .select([
-                'sp.id',
-                'sp.member_id',
-                'sp.share_class_id',
-                'sp.quantity',
-                'sp.unit_price',
-                'sp.total_amount',
-                'sp.payment_method',
-                'sp.payment_reference',
-                'sp.purchase_date',
-                'sp.created_at',
+                'st.id',
+                'st.member_id',
+                'st.share_class_id',
+                'st.quantity',
+                'st.unit_price',
+                'st.total_amount',
+                'st.transaction_date as purchase_date',
+                'st.created_at',
                 'sc.name as share_class_name',
                 'sc.code as share_class_code',
                 'm.first_name',
                 'm.last_name',
                 'm.member_number',
             ])
-            .where('sp.id', '=', purchaseId)
+            .where('st.id', '=', purchaseId)
+            .where('st.transaction_type', '=', 'purchase')
             .executeTakeFirst();
 
         if (!purchase) {
@@ -913,7 +912,7 @@ shareRoutes.get('/members/:memberId/holdings', async (c) => {
                 'sh.id',
                 'sh.member_id',
                 'sh.share_class_id',
-                'sh.quantity',
+                'sh.total_shares',
                 'sh.certificate_number',
                 'sc.name as share_class_name',
                 'sc.code as share_class_code',
@@ -934,22 +933,23 @@ shareRoutes.get('/members/:memberId/transactions', async (c) => {
         const { memberId } = c.req.param();
         const db = c.get('db')!;
 
-        const purchases = await db
-            .selectFrom('share_purchases as sp')
-            .innerJoin('share_classes as sc', 'sc.id', 'sp.share_class_id')
+        const transactions = await db
+            .selectFrom('share_transactions as st')
+            .innerJoin('share_classes as sc', 'sc.id', 'st.share_class_id')
             .select([
-                'sp.id',
-                'sp.purchase_date as transaction_date',
-                db.raw("'purchase'").as('transaction_type'),
-                'sp.quantity',
-                'sp.unit_price',
-                'sp.total_amount',
+                'st.id',
+                'st.transaction_date',
+                'st.transaction_type',
+                'st.quantity',
+                'st.unit_price',
+                'st.total_amount',
                 'sc.name as share_class_name',
             ])
-            .where('sp.member_id', '=', memberId)
+            .where('st.member_id', '=', memberId)
+            .orderBy('st.transaction_date', 'desc')
             .execute();
 
-        return c.json({ success: true, data: purchases });
+        return c.json({ success: true, data: transactions });
     } catch (error) {
         throw error;
     }
@@ -962,21 +962,28 @@ shareRoutes.get('/transfers/:transferId', async (c) => {
         const db = c.get('db')!;
 
         const transfer = await db
-            .selectFrom('share_transfers as st')
+            .selectFrom('share_transactions as st')
             .innerJoin('share_classes as sc', 'sc.id', 'st.share_class_id')
             .select([
                 'st.id',
-                'st.from_member_id',
-                'st.to_member_id',
+                'st.member_id',
+                'st.counterparty_member_id',
                 'st.share_class_id',
                 'st.quantity',
-                'st.transfer_price',
+                'st.unit_price',
                 'st.total_amount',
-                'st.transfer_date',
+                'st.transaction_date as transfer_date',
                 'st.status',
+                'st.transaction_type',
                 'sc.name as share_class_name',
             ])
             .where('st.id', '=', transferId)
+            .where(({ or, eb }) =>
+                or([
+                    eb('st.transaction_type', '=', 'transfer_out'),
+                    eb('st.transaction_type', '=', 'transfer_in')
+                ])
+            )
             .executeTakeFirst();
 
         if (!transfer) {
@@ -1105,12 +1112,13 @@ shareRoutes.get('/members/:memberId/certificate', async (c) => {
             .selectFrom('share_holdings as sh')
             .innerJoin('share_classes as sc', 'sc.id', 'sh.share_class_id')
             .select([
-                'sh.quantity',
+                'sh.total_shares',
                 'sh.certificate_number',
                 'sc.name as share_class_name',
                 'sc.par_value',
             ])
             .where('sh.member_id', '=', memberId)
+            .where('sh.deleted_at', 'is', null)
             .execute();
 
         return c.json({
@@ -1137,18 +1145,20 @@ shareRoutes.get('/classes/:classId/analytics', async (c) => {
             .selectFrom('share_holdings')
             .select([
                 db.fn.countAll().as('total_holders'),
-                db.fn.sum('quantity' as any).as('total_shares'),
+                db.fn.sum<string>('total_shares').as('total_shares'),
             ])
             .where('share_class_id', '=', classId)
+            .where('deleted_at', 'is', null)
             .executeTakeFirst();
 
         const purchases = await db
-            .selectFrom('share_purchases')
+            .selectFrom('share_transactions')
             .select([
                 db.fn.countAll().as('total_purchases'),
-                db.fn.sum('total_amount' as any).as('total_value'),
+                db.fn.sum<string>('total_amount').as('total_value'),
             ])
             .where('share_class_id', '=', classId)
+            .where('transaction_type', '=', 'purchase')
             .executeTakeFirst();
 
         return c.json({

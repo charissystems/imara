@@ -178,8 +178,8 @@ export class ShareService {
                 .updateTable('share_holdings')
                 .set({
                     total_shares: newTotal as any,
-                    total_invested: newTotalInvested as any,
-                    average_cost_per_share: newAvgCost as any,
+                    total_invested: newTotalInvested.toString() as any,
+                    average_cost_per_share: newAvgCost.toString() as any,
                     updated_at: new Date() as any,
                 })
                 .where('id', '=', holding.id)
@@ -195,8 +195,8 @@ export class ShareService {
                     member_id: input.memberId,
                     share_class_id: input.shareClassId,
                     total_shares: input.quantity as any,
-                    average_cost_per_share: unitPrice as any,
-                    total_invested: totalAmount as any,
+                    average_cost_per_share: unitPrice.toString() as any,
+                    total_invested: totalAmount.toString() as any,
                     certificate_number: certNumber,
                     purchase_date: new Date() as any,
                     is_locked: false as any,
@@ -214,8 +214,8 @@ export class ShareService {
                 member_id: input.memberId,
                 transaction_type: 'purchase' as any,
                 quantity: input.quantity as any,
-                unit_price: unitPrice as any,
-                total_amount: totalAmount as any,
+                unit_price: unitPrice.toString() as any,
+                total_amount: totalAmount.toString() as any,
                 transaction_date: new Date() as any,
                 status: 'completed' as any,
                 description: `Purchase of ${input.quantity} ${shareClass.name} shares`,
@@ -342,7 +342,7 @@ export class ShareService {
             .updateTable('share_holdings')
             .set({
                 total_shares: senderNewTotal as any,
-                total_invested: Decimal.max(0, senderNewInvested) as any,
+                total_invested: Decimal.max(0, senderNewInvested).toString() as any,
                 last_transfer_date: new Date() as any,
                 updated_at: new Date() as any,
             })
@@ -359,8 +359,8 @@ export class ShareService {
                 .updateTable('share_holdings')
                 .set({
                     total_shares: receiverNewTotal as any,
-                    total_invested: receiverNewInvested as any,
-                    average_cost_per_share: receiverAvgCost as any,
+                    total_invested: receiverNewInvested.toString() as any,
+                    average_cost_per_share: receiverAvgCost.toString() as any,
                     last_transfer_date: new Date() as any,
                     updated_at: new Date() as any,
                 })
@@ -374,8 +374,8 @@ export class ShareService {
                     member_id: input.toMemberId,
                     share_class_id: input.shareClassId,
                     total_shares: input.quantity as any,
-                    average_cost_per_share: price as any,
-                    total_invested: totalAmount as any,
+                    average_cost_per_share: price.toString() as any,
+                    total_invested: totalAmount.toString() as any,
                     certificate_number: certNumber,
                     purchase_date: new Date() as any,
                     is_locked: false as any,
@@ -393,8 +393,8 @@ export class ShareService {
                 member_id: input.fromMemberId,
                 transaction_type: 'transfer_out' as any,
                 quantity: input.quantity as any,
-                unit_price: price as any,
-                total_amount: totalAmount as any,
+                unit_price: price.toString() as any,
+                total_amount: totalAmount.toString() as any,
                 counterparty_member_id: input.toMemberId,
                 transaction_date: new Date() as any,
                 status: 'completed' as any,
@@ -414,8 +414,8 @@ export class ShareService {
                 member_id: input.toMemberId,
                 transaction_type: 'transfer_in' as any,
                 quantity: input.quantity as any,
-                unit_price: price as any,
-                total_amount: totalAmount as any,
+                unit_price: price.toString() as any,
+                total_amount: totalAmount.toString() as any,
                 counterparty_member_id: input.fromMemberId,
                 related_transaction_id: fromTx.id,
                 transaction_date: new Date() as any,
@@ -494,8 +494,8 @@ export class ShareService {
             .values({
                 share_class_id: input.shareClassId,
                 dividend_number: dividendNumber,
-                dividend_per_share: new Decimal(input.dividendPerShare) as any,
-                withholding_tax_rate: new Decimal(whtRate) as any,
+                dividend_per_share: new Decimal(input.dividendPerShare).toString() as any,
+                withholding_tax_rate: new Decimal(whtRate).toString() as any,
                 record_date: input.recordDate as any,
                 payment_date: input.paymentDate as any,
                 status: 'draft' as any,
@@ -572,8 +572,8 @@ export class ShareService {
                         member_id: holding.member_id,
                         transaction_type: 'dividend' as any,
                         quantity: shares as any,
-                        unit_price: dividendPerShare as any,
-                        total_amount: netDividend as any,
+                        unit_price: dividendPerShare.toString() as any,
+                        total_amount: netDividend.toString() as any,
                         transaction_date: new Date() as any,
                         status: 'completed' as any,
                         description: `Dividend payment: ${declaration.dividend_number}`,
@@ -595,7 +595,7 @@ export class ShareService {
         await this.db
             .updateTable('dividend_declarations')
             .set({
-                total_dividend_amount: totalDividend as any,
+                total_dividend_amount: totalDividend.toString() as any,
                 status: 'completed' as any,
                 updated_at: new Date() as any,
             })
