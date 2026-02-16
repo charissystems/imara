@@ -107,7 +107,7 @@ export class AuditLogger {
                     created_at: logEntry.timestamp || new Date(),
                 })
                 .execute()
-                .catch(error => {
+                .catch((error: unknown) => {
                     appLogger.warn('Failed to persist audit log to database', {
                         error: error instanceof Error ? error.message : 'Unknown error',
                         table: logEntry.tableName,
@@ -217,7 +217,7 @@ export class AuditLogger {
                 .limit(limit)
                 .execute();
 
-            return logs.map(log => ({
+            return logs.map((log: any) => ({
                 schemaName: log.schema_name,
                 tableName: log.table_name,
                 recordId: log.record_id,
@@ -253,7 +253,7 @@ export class AuditLogger {
                 .limit(limit)
                 .execute();
 
-            return logs.map(log => ({
+            return logs.map((log: any) => ({
                 schemaName: log.schema_name,
                 tableName: log.table_name,
                 recordId: log.record_id,
@@ -287,7 +287,7 @@ export class AuditLogger {
                 .limit(limit)
                 .execute();
 
-            return logs.map(log => ({
+            return logs.map((log: any) => ({
                 schemaName: log.schema_name,
                 tableName: log.table_name,
                 recordId: log.record_id,

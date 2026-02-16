@@ -92,8 +92,9 @@ export function sanitizeTenantId(tenantId: string): string {
     const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     
     if (!uuidPattern.test(tenantId)) {
-        appLogger.error('Invalid tenant ID format', { tenantId });
-        throw new Error('Invalid tenant ID format');
+        const error = new Error('Invalid tenant ID format');
+        appLogger.error('Invalid tenant ID format', error, { tenantId });
+        throw error;
     }
     
     return tenantId.toLowerCase();
