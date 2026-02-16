@@ -1,0 +1,49 @@
+version: 2
+
+updates:
+  # Backend npm dependencies
+  - package-ecosystem: npm
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 10
+    target-branch: development
+    labels:
+      - dependencies
+      - chore
+    groups:
+      production-dependencies:
+        dependency-type: production
+      development-dependencies:
+        dependency-type: development
+    commit-message:
+      prefix: "chore(deps)"
+
+  # GitHub Actions versions
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    target-branch: development
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: "ci(deps)"
+
+  # Dockerfile base images
+  - package-ecosystem: docker
+    directory: /backend
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    target-branch: development
+    labels:
+      - dependencies
+      - docker
+    commit-message:
+      prefix: "build(docker)"

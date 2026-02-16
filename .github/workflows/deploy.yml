@@ -3,6 +3,11 @@ name: Deploy
 on:
   push:
     branches: [main, development]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.github/dependabot.yml'
+      - 'LICENSE'
 
 concurrency:
   group: deploy-${{ github.ref_name }}
@@ -25,6 +30,7 @@ jobs:
     permissions:
       contents: read
       packages: write
+      security-events: write
     outputs:
       image-tag: ${{ steps.meta.outputs.tags }}
       image-digest: ${{ steps.build.outputs.digest }}
@@ -62,6 +68,20 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      - name: Scan image for vulnerabilities
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload Trivy scan results
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
   # ── Deploy to Staging ─────────────────────────────────────────────────
   deploy-staging:
     name: Deploy to Staging
@@ -91,6 +111,23 @@ jobs:
           # Option C: Cloud provider CLI (fly deploy, railway up, etc.)
           echo "Staging deployment complete."
 
+      - name: Health check
+        run: |
+          echo "Verifying staging health..."
+          # TODO: Uncomment when staging URL is configured
+          # for i in $(seq 1 10); do
+          #   STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ vars.STAGING_URL }}/health" || true)
+          #   if [ "$STATUS" = "200" ]; then
+          #     echo "Health check passed"
+          #     exit 0
+          #   fi
+          #   echo "Attempt $i: status=$STATUS, retrying in 10s..."
+          #   sleep 10
+          # done
+          # echo "Health check failed after 10 attempts"
+          # exit 1
+          echo "Health check skipped (placeholder)."
+
   # ── Deploy to Production ──────────────────────────────────────────────
   deploy-production:
     name: Deploy to Production
@@ -119,14 +156,34 @@ jobs:
           # TODO: Replace with your deployment mechanism
           echo "Production deployment complete."
 
-      - name: Smoke test
+      - name: Health check
         run: |
-          echo "Running smoke tests against production..."
-          # TODO: curl -f $PRODUCTION_URL/health || exit 1
-          echo "Smoke tests passed."
+          echo "Verifying production health..."
+          # TODO: Uncomment when production URL is configured
+          # for i in $(seq 1 10); do
+          #   STATUS=$(curl -s -o /dev/null -w "%{http_code}" "${{ vars.PRODUCTION_URL }}/health" || true)
+          #   if [ "$STATUS" = "200" ]; then
+          #     echo "Health check passed"
+          #     exit 0
+          #   fi
+          #   echo "Attempt $i: status=$STATUS, retrying in 10s..."
+          #   sleep 10
+          # done
+          # echo "Health check failed after 10 attempts"
+          # exit 1
+          echo "Health check skipped (placeholder)."
+
+      - name: Deployment summary
+        run: |
+          echo "### Production Deployment" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image:** \`${{ needs.build-and-push.outputs.image-tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Digest:** \`${{ needs.build-and-push.outputs.image-digest }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Deployed at:** $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
 
       - name: Notify on failure
         if: failure()
         run: |
-          echo "⚠️ Production deployment failed!"
+          echo "Production deployment failed!"
           # TODO: Send Slack/email notification
