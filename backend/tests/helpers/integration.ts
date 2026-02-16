@@ -175,30 +175,69 @@ export async function seedLoanProduct(
  * Deletes in reverse FK order to avoid constraint violations.
  */
 export async function cleanupTestData(): Promise<void> {
+    const testMemberFilter = `SELECT id FROM members WHERE email LIKE '%@integration-test.local'`;
+
+    // Helper: silently skip if table doesn't exist
+    const safeDelete = async (sql: string) => {
+        try {
+            await dbManager.executeRaw(TEST_SCHEMA, sql);
+        } catch (err: any) {
+            if (err?.message?.includes('does not exist')) return;
+            throw err;
+        }
+    };
+
+    // Messaging-related cleanup
+    await safeDelete(`DELETE FROM communication_preferences WHERE member_id IN (${testMemberFilter})`);
+    await safeDelete(`DELETE FROM messages WHERE member_id IN (${testMemberFilter})`);
+
+    // Fixed deposit-related cleanup (fd_rollovers has RESTRICT on original_fd_id)
+    await safeDelete(`DELETE FROM fd_rollovers WHERE original_fd_id IN (SELECT id FROM fixed_deposits WHERE member_id IN (${testMemberFilter}))`);
+    await safeDelete(`DELETE FROM fd_interest_schedules WHERE fixed_deposit_id IN (SELECT id FROM fixed_deposits WHERE member_id IN (${testMemberFilter}))`);
+    await safeDelete(`DELETE FROM fd_maturity_alerts WHERE fixed_deposit_id IN (SELECT id FROM fixed_deposits WHERE member_id IN (${testMemberFilter}))`);
+    await safeDelete(`DELETE FROM maturity_alerts WHERE member_id IN (${testMemberFilter})`);
+    await safeDelete(`DELETE FROM fixed_deposits WHERE member_id IN (${testMemberFilter})`);
+
+    // Share-related cleanup
+    await safeDelete(`DELETE FROM share_transactions WHERE member_id IN (${testMemberFilter})`);
+    await safeDelete(`DELETE FROM share_register WHERE member_id IN (${testMemberFilter})`);
+    await safeDelete(`DELETE FROM share_holdings WHERE member_id IN (${testMemberFilter})`);
+
     // Loan-related cleanup
-    await dbManager.executeRaw(TEST_SCHEMA, `DELETE FROM loan_repayments WHERE loan_account_id IN (SELECT id FROM loan_accounts WHERE member_id IN (SELECT id FROM members WHERE email LIKE '%@integration-test.local'))`);
-    await dbManager.executeRaw(TEST_SCHEMA, `DELETE FROM loan_schedules  WHERE loan_account_id IN (SELECT id FROM loan_accounts WHERE member_id IN (SELECT id FROM members WHERE email LIKE '%@integration-test.local'))`);
-    await dbManager.executeRaw(TEST_SCHEMA, `DELETE FROM loan_guarantors WHERE application_id IN (SELECT id FROM loan_applications WHERE member_id IN (SELECT id FROM members WHERE email LIKE '%@integration-test.local'))`);
-    await dbManager.executeRaw(TEST_SCHEMA, `DELETE FROM loan_appraisals WHERE application_id IN (SELECT id FROM loan_applications WHERE member_id IN (SELECT id FROM members WHERE email LIKE '%@integration-test.local'))`);
-    await dbManager.executeRaw(TEST_SCHEMA, `DELETE FROM loan_accounts   WHERE member_id IN (SELECT id FROM members WHERE email LIKE '%@integration-test.local')`);
-    await dbManager.executeRaw(TEST_SCHEMA, `DELETE FROM loan_applications WHERE member_id IN (SELECT id FROM members WHERE email LIKE '%@integration-test.local')`);
+    await safeDelete(`DELETE FROM loan_repayments WHERE loan_account_id IN (SELECT id FROM loan_accounts WHERE member_id IN (${testMemberFilter}))`);
+    await safeDelete(`DELETE FROM loan_schedules  WHERE loan_account_id IN (SELECT id FROM loan_accounts WHERE member_id IN (${testMemberFilter}))`);
+    await safeDelete(`DELETE FROM loan_guarantors WHERE application_id IN (SELECT id FROM loan_applications WHERE member_id IN (${testMemberFilter}))`);
+    await safeDelete(`DELETE FROM loan_appraisals WHERE application_id IN (SELECT id FROM loan_applications WHERE member_id IN (${testMemberFilter}))`);
+    await safeDelete(`DELETE FROM loan_accounts   WHERE member_id IN (${testMemberFilter})`);
+    await safeDelete(`DELETE FROM loan_applications WHERE member_id IN (${testMemberFilter})`);
 
     // Savings-related cleanup
-    await dbManager.executeRaw(TEST_SCHEMA, `DELETE FROM internal_transfers WHERE from_account_id IN (SELECT id FROM savings_accounts WHERE member_id IN (SELECT id FROM members WHERE email LIKE '%@integration-test.local'))`);
-    await dbManager.executeRaw(TEST_SCHEMA, `DELETE FROM deposits     WHERE member_id IN (SELECT id FROM members WHERE email LIKE '%@integration-test.local')`);
-    await dbManager.executeRaw(TEST_SCHEMA, `DELETE FROM withdrawals  WHERE member_id IN (SELECT id FROM members WHERE email LIKE '%@integration-test.local')`);
-    await dbManager.executeRaw(TEST_SCHEMA, `DELETE FROM savings_accounts WHERE member_id IN (SELECT id FROM members WHERE email LIKE '%@integration-test.local')`);
+    await safeDelete(`DELETE FROM internal_transfers WHERE from_account_id IN (SELECT id FROM savings_accounts WHERE member_id IN (${testMemberFilter}))`);
+    await safeDelete(`DELETE FROM deposits     WHERE member_id IN (${testMemberFilter})`);
+    await safeDelete(`DELETE FROM withdrawals  WHERE member_id IN (${testMemberFilter})`);
+    await safeDelete(`DELETE FROM savings_accounts WHERE member_id IN (${testMemberFilter})`);
+
+    // Transaction cleanup (RESTRICT)
+    await safeDelete(`DELETE FROM transactions WHERE member_id IN (${testMemberFilter})`);
+
+    // Other member-related cleanup
+    await safeDelete(`DELETE FROM standing_instructions WHERE member_id IN (${testMemberFilter})`);
+    await safeDelete(`DELETE FROM beneficiaries WHERE member_id IN (${testMemberFilter})`);
+    await safeDelete(`DELETE FROM member_accounts WHERE member_id IN (${testMemberFilter})`);
+    await safeDelete(`DELETE FROM memberships WHERE member_id IN (${testMemberFilter})`);
+    await safeDelete(`DELETE FROM identity_documents WHERE member_id IN (${testMemberFilter})`);
+    await safeDelete(`DELETE FROM member_credentials WHERE member_id IN (${testMemberFilter})`);
 
     // Products cleanup (by known test IDs)
-    await dbManager.executeRaw(TEST_SCHEMA, `DELETE FROM savings_products WHERE id = $1`, [TEST_SAVINGS_PRODUCT_ID]);
-    await dbManager.executeRaw(TEST_SCHEMA, `DELETE FROM loan_products    WHERE id = $1`, [TEST_LOAN_PRODUCT_ID]);
+    await safeDelete(`DELETE FROM savings_products WHERE id = '${TEST_SAVINGS_PRODUCT_ID}'`);
+    await safeDelete(`DELETE FROM loan_products    WHERE id = '${TEST_LOAN_PRODUCT_ID}'`);
 
     // Auth-related cleanup (registered test staff)
-    await dbManager.executeRaw(TEST_SCHEMA, `DELETE FROM staff_credentials WHERE staff_id IN (SELECT id FROM staff WHERE email LIKE '%@integration-test.local')`);
-    await dbManager.executeRaw(TEST_SCHEMA, `DELETE FROM staff WHERE email LIKE '%@integration-test.local'`);
+    await safeDelete(`DELETE FROM staff_credentials WHERE staff_id IN (SELECT id FROM staff WHERE email LIKE '%@integration-test.local')`);
+    await safeDelete(`DELETE FROM staff WHERE email LIKE '%@integration-test.local'`);
 
     // Member cleanup
-    await dbManager.executeRaw(TEST_SCHEMA, `DELETE FROM members WHERE email LIKE '%@integration-test.local'`);
+    await safeDelete(`DELETE FROM members WHERE email LIKE '%@integration-test.local'`);
 }
 
 /**

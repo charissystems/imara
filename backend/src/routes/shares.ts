@@ -221,7 +221,10 @@ shareRoutes.post('/purchase', validate(purchaseSharesSchema), async (c) => {
 
         return c.json({
             success: true,
-            data: result,
+            data: {
+                id: result.transaction.id,
+                ...result,
+            },
             meta: { purchased: true },
         }, 201);
     } catch (error) {
@@ -262,7 +265,10 @@ shareRoutes.post('/transfer', validate(transferSharesSchema), async (c) => {
 
         return c.json({
             success: true,
-            data: result,
+            data: {
+                id: result.fromTransaction.id,
+                ...result,
+            },
             meta: { transferred: true },
         }, 201);
     } catch (error) {
@@ -427,7 +433,10 @@ shareRoutes.post('/dividends/declare', validate(declareDividendSchema), async (c
 
         return c.json({
             success: true,
-            data: result,
+            data: {
+                id: result.declarationId,
+                ...result,
+            },
             meta: { declared: true },
         }, 201);
     } catch (error) {
@@ -868,12 +877,13 @@ shareRoutes.get('/purchases/:purchaseId', async (c) => {
 
         const purchase = await db
             .selectFrom('share_transactions as st')
-            .innerJoin('share_classes as sc', 'sc.id', 'st.share_class_id')
+            .innerJoin('share_holdings as sh', 'sh.id', 'st.share_holding_id')
+            .innerJoin('share_classes as sc', 'sc.id', 'sh.share_class_id')
             .innerJoin('members as m', 'm.id', 'st.member_id')
             .select([
                 'st.id',
                 'st.member_id',
-                'st.share_class_id',
+                'sh.share_class_id',
                 'st.quantity',
                 'st.unit_price',
                 'st.total_amount',
@@ -935,7 +945,8 @@ shareRoutes.get('/members/:memberId/transactions', async (c) => {
 
         const transactions = await db
             .selectFrom('share_transactions as st')
-            .innerJoin('share_classes as sc', 'sc.id', 'st.share_class_id')
+            .innerJoin('share_holdings as sh', 'sh.id', 'st.share_holding_id')
+            .innerJoin('share_classes as sc', 'sc.id', 'sh.share_class_id')
             .select([
                 'st.id',
                 'st.transaction_date',
@@ -963,12 +974,13 @@ shareRoutes.get('/transfers/:transferId', async (c) => {
 
         const transfer = await db
             .selectFrom('share_transactions as st')
-            .innerJoin('share_classes as sc', 'sc.id', 'st.share_class_id')
+            .innerJoin('share_holdings as sh', 'sh.id', 'st.share_holding_id')
+            .innerJoin('share_classes as sc', 'sc.id', 'sh.share_class_id')
             .select([
                 'st.id',
                 'st.member_id',
                 'st.counterparty_member_id',
-                'st.share_class_id',
+                'sh.share_class_id',
                 'st.quantity',
                 'st.unit_price',
                 'st.total_amount',
@@ -1011,14 +1023,14 @@ shareRoutes.get('/dividends/declarations', async (c) => {
                 'dd.dividend_per_share',
                 'dd.record_date',
                 'dd.payment_date',
-                'dd.declaration_date',
+                'dd.created_at as declaration_date',
                 'dd.total_dividend_amount',
                 'dd.withholding_tax_rate',
                 'dd.status',
                 'sc.name as share_class_name',
                 'sc.code as share_class_code',
             ])
-            .orderBy('dd.declaration_date', 'desc');
+            .orderBy('dd.created_at', 'desc');
 
         if (status) {
             query = query.where('dd.status', '=', status as any);
@@ -1047,7 +1059,7 @@ shareRoutes.get('/dividends/declarations/:declarationId', async (c) => {
                 'dd.dividend_per_share',
                 'dd.record_date',
                 'dd.payment_date',
-                'dd.declaration_date',
+                'dd.created_at as declaration_date',
                 'dd.total_dividend_amount',
                 'dd.withholding_tax_rate',
                 'dd.status',
@@ -1152,13 +1164,14 @@ shareRoutes.get('/classes/:classId/analytics', async (c) => {
             .executeTakeFirst();
 
         const purchases = await db
-            .selectFrom('share_transactions')
+            .selectFrom('share_transactions as st')
+            .innerJoin('share_holdings as sh', 'sh.id', 'st.share_holding_id')
             .select([
                 db.fn.countAll().as('total_purchases'),
                 db.fn.sum<string>('total_amount').as('total_value'),
             ])
-            .where('share_class_id', '=', classId)
-            .where('transaction_type', '=', 'purchase')
+            .where('sh.share_class_id', '=', classId)
+            .where('st.transaction_type', '=', 'purchase')
             .executeTakeFirst();
 
         return c.json({

@@ -398,8 +398,8 @@ export class FixedDepositService {
                 status: 'closed' as any,
                 maturity_action: 'withdrawn' as any,
                 maturity_action_date: new Date() as any,
-                interest_paid: result.interestEarned.minus(result.penalty) as any,
-                withholding_tax_amount: result.withholdingTax as any,
+                interest_paid: result.interestEarned.minus(result.penalty).toFixed(4) as any,
+                withholding_tax_amount: result.withholdingTax.toFixed(4) as any,
                 updated_at: new Date() as any,
             })
             .where('id', '=', depositId)

@@ -460,7 +460,42 @@ reportRoutes.get('/dashboard', async (c) => {
 reportRoutes.get('/dashboard/kpis', async (c) => {
     const service = getService(c);
     const dashboard = await service.getDashboard(getUserId(c));
-    return c.json({ success: true, data: dashboard.kpis });
+    const kpis = dashboard.kpis;
+
+    // Structure KPIs into categories for the dashboard
+    return c.json({
+        success: true,
+        data: {
+            membership: {
+                total_members: kpis.total_members,
+                active_members: kpis.active_members,
+                new_members_this_month: kpis.new_members_this_month,
+            },
+            savings: {
+                total_savings_balance: kpis.total_savings_balance,
+                total_deposits_today: kpis.total_deposits_today,
+                total_withdrawals_today: kpis.total_withdrawals_today,
+            },
+            loans: {
+                total_loan_portfolio: kpis.total_loan_portfolio,
+                active_loans: kpis.active_loans,
+                total_disbursed_this_month: kpis.total_disbursed_this_month,
+                total_repayments_this_month: kpis.total_repayments_this_month,
+                total_arrears: kpis.total_arrears,
+                loans_in_arrears: kpis.loans_in_arrears,
+                npl_count: kpis.npl_count,
+                npl_amount: kpis.npl_amount,
+                par_30: kpis.par_30,
+                par_90: kpis.par_90,
+            },
+            shares: {
+                total_shares_value: kpis.total_shares_value,
+            },
+            fixed_deposits: {
+                total_fixed_deposits: kpis.total_fixed_deposits,
+            },
+        },
+    });
 });
 
 reportRoutes.get('/dashboard/activity', async (c) => {

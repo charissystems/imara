@@ -958,6 +958,479 @@ fixedDepositRoutes.get('/analytics', enforcePermission('fixed_deposits', 'read')
 });
 
 // =============================================================================
+// FD INTEREST PREVIEW & BREAKDOWN
+// =============================================================================
+
+/**
+ * GET /fixed-deposits/:depositId/interest-preview
+ * Preview interest calculation for an FD
+ */
+fixedDepositRoutes.get('/:depositId/interest-preview', async (c) => {
+    try {
+        const { depositId } = c.req.param();
+        const db = c.get('db')!;
+
+        const fd = await db
+            .selectFrom('fixed_deposits as fd')
+            .innerJoin('fixed_deposit_products as fp', 'fp.id', 'fd.product_id')
+            .select([
+                'fd.id',
+                'fd.principal_amount',
+                'fd.interest_rate',
+                'fd.deposit_date',
+                'fd.maturity_date',
+                'fd.interest_accrued',
+                'fd.interest_paid',
+                'fd.withholding_tax_amount',
+                'fd.status',
+                'fp.tenure_days',
+                'fp.tenure_type',
+                'fp.interest_calculation_method',
+                'fp.calculation_basis',
+                'fp.withholding_tax_rate',
+                'fp.interest_paid_frequency',
+            ])
+            .where('fd.id', '=', depositId)
+            .where('fd.deleted_at', 'is', null)
+            .executeTakeFirst();
+
+        if (!fd) {
+            throw new NotFoundError('FixedDeposit', depositId);
+        }
+
+        const principal = Number(fd.principal_amount?.toString() || 0);
+        const rate = Number(fd.interest_rate?.toString() || 0);
+        const tenureDays = Number(fd.tenure_days || 365);
+        const basisDays = Number(fd.calculation_basis || 365);
+        const whtRate = Number(fd.withholding_tax_rate?.toString() || 0);
+
+        let interestEarned: number;
+        if (fd.interest_calculation_method === 'compound') {
+            interestEarned = principal * (Math.pow(1 + rate / 100 / basisDays, tenureDays) - 1);
+        } else {
+            interestEarned = (principal * rate * tenureDays) / (basisDays * 100);
+        }
+
+        const withholdingTax = interestEarned * (whtRate / 100);
+        const netInterest = interestEarned - withholdingTax;
+        const maturityValue = principal + netInterest;
+
+        return c.json({
+            success: true,
+            data: {
+                deposit_id: depositId,
+                principal_amount: principal.toFixed(2),
+                interest_rate: rate.toFixed(2),
+                tenure_days: tenureDays,
+                interest_earned: interestEarned.toFixed(2),
+                withholding_tax: withholdingTax.toFixed(2),
+                net_interest: netInterest.toFixed(2),
+                maturity_value: maturityValue.toFixed(2),
+                calculation_method: fd.interest_calculation_method || 'simple',
+                interest_accrued_to_date: fd.interest_accrued?.toString() || '0',
+            },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * GET /fixed-deposits/:depositId/interest-breakdown
+ * Get detailed interest breakdown by period
+ */
+fixedDepositRoutes.get('/:depositId/interest-breakdown', async (c) => {
+    try {
+        const { depositId } = c.req.param();
+        const db = c.get('db')!;
+
+        const fd = await db
+            .selectFrom('fixed_deposits')
+            .select(['id', 'principal_amount', 'interest_rate', 'deposit_date', 'maturity_date'])
+            .where('id', '=', depositId)
+            .where('deleted_at', 'is', null)
+            .executeTakeFirst();
+
+        if (!fd) {
+            throw new NotFoundError('FixedDeposit', depositId);
+        }
+
+        const schedules = await db
+            .selectFrom('fd_interest_schedules')
+            .selectAll()
+            .where('fixed_deposit_id', '=', depositId)
+            .orderBy('interest_period_number', 'asc')
+            .execute();
+
+        return c.json({
+            success: true,
+            data: {
+                deposit_id: depositId,
+                principal_amount: fd.principal_amount?.toString(),
+                interest_rate: fd.interest_rate?.toString(),
+                deposit_date: fd.deposit_date,
+                maturity_date: fd.maturity_date,
+                periods: schedules,
+            },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// MEMBER FD ENDPOINTS
+// =============================================================================
+
+/**
+ * GET /fixed-deposits/members/:memberId
+ * List all FDs for a specific member
+ */
+fixedDepositRoutes.get('/members/:memberId', async (c) => {
+    try {
+        const { memberId } = c.req.param();
+        const db = c.get('db')!;
+
+        const deposits = await db
+            .selectFrom('fixed_deposits as fd')
+            .innerJoin('fixed_deposit_products as fp', 'fp.id', 'fd.product_id')
+            .select([
+                'fd.id',
+                'fd.certificate_number',
+                'fd.principal_amount',
+                'fd.interest_rate',
+                'fd.deposit_date',
+                'fd.maturity_date',
+                'fd.interest_accrued',
+                'fd.interest_paid',
+                'fd.status',
+                'fd.maturity_action',
+                'fp.name as product_name',
+                'fp.code as product_code',
+            ])
+            .where('fd.member_id', '=', memberId)
+            .where('fd.deleted_at', 'is', null)
+            .orderBy('fd.created_at', 'desc')
+            .execute();
+
+        return c.json({
+            success: true,
+            data: deposits,
+            meta: { count: deposits.length, member_id: memberId },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * GET /fixed-deposits/members/:memberId/summary
+ * Get summary of a member's FD portfolio
+ */
+fixedDepositRoutes.get('/members/:memberId/summary', async (c) => {
+    try {
+        const { memberId } = c.req.param();
+        const db = c.get('db')!;
+
+        const stats = await db
+            .selectFrom('fixed_deposits as fd')
+            .select([
+                db.fn.countAll().as('total_count'),
+                db.fn.sum('fd.principal_amount' as any).as('total_principal'),
+                db.fn.sum('fd.interest_accrued' as any).as('total_interest_accrued'),
+                db.fn.sum('fd.interest_paid' as any).as('total_interest_paid'),
+            ])
+            .where('fd.member_id', '=', memberId)
+            .where('fd.deleted_at', 'is', null)
+            .executeTakeFirst();
+
+        const activeCount = await db
+            .selectFrom('fixed_deposits')
+            .select(db.fn.countAll().as('count'))
+            .where('member_id', '=', memberId)
+            .where('status', '=', 'active' as any)
+            .where('deleted_at', 'is', null)
+            .executeTakeFirst();
+
+        return c.json({
+            success: true,
+            data: {
+                member_id: memberId,
+                total_deposits: Number(stats?.total_count || 0),
+                active_deposits: Number(activeCount?.count || 0),
+                total_principal: stats?.total_principal?.toString() || '0',
+                total_interest_accrued: stats?.total_interest_accrued?.toString() || '0',
+                total_interest_paid: stats?.total_interest_paid?.toString() || '0',
+            },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// PREMATURE WITHDRAWAL (ALTERNATE URLS)
+// =============================================================================
+
+/**
+ * GET /fixed-deposits/:depositId/premature-withdrawal-preview
+ * Alias for withdrawal preview
+ */
+fixedDepositRoutes.get('/:depositId/premature-withdrawal-preview', async (c) => {
+    try {
+        const { depositId } = c.req.param();
+        const db = c.get('db')!;
+
+        const fdService = new FixedDepositService(db);
+        const preview = await fdService.calculatePrematureWithdrawal(depositId);
+
+        return c.json({
+            success: true,
+            data: {
+                deposit_id: preview.depositId,
+                principal_amount: preview.principalAmount.toFixed(2),
+                interest_earned: preview.interestEarned.toFixed(2),
+                penalty_amount: preview.penalty.toFixed(2),
+                withholding_tax: preview.withholdingTax.toFixed(2),
+                net_amount: preview.netPayout.toFixed(2),
+            },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * POST /fixed-deposits/:depositId/premature-withdrawal
+ * Alias for processing premature withdrawal
+ */
+fixedDepositRoutes.post('/:depositId/premature-withdrawal', validate(prematureWithdrawalSchema), async (c) => {
+    try {
+        const { depositId } = c.req.param();
+        const user = c.get('user');
+        const db = c.get('db')!;
+
+        if (!user || !hasPermission(user.role || '', 'fixed_deposits', 'update')) {
+            throw new UnauthorizedError('Insufficient permissions');
+        }
+
+        const fdService = new FixedDepositService(db);
+        const result = await fdService.processPrematureWithdrawal(depositId, user.id);
+
+        return c.json({
+            success: true,
+            data: {
+                deposit_id: result.depositId,
+                principal_amount: result.principalAmount.toFixed(2),
+                interest_earned: result.interestEarned.toFixed(2),
+                penalty_amount: result.penalty.toFixed(2),
+                withholding_tax: result.withholdingTax.toFixed(2),
+                net_amount: result.netPayout.toFixed(2),
+            },
+            meta: { withdrawn: true },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// FD ROLLOVER
+// =============================================================================
+
+/**
+ * POST /fixed-deposits/:depositId/rollover
+ * Manually rollover a matured FD
+ */
+fixedDepositRoutes.post('/:depositId/rollover', async (c) => {
+    try {
+        const { depositId } = c.req.param();
+        const user = c.get('user');
+        const db = c.get('db')!;
+
+        if (!user || !hasPermission(user.role || '', 'fixed_deposits', 'update')) {
+            throw new UnauthorizedError('Insufficient permissions');
+        }
+
+        const body = await c.req.json().catch(() => ({}));
+        const rolloverType = body.rollover_type || 'principal_only';
+
+        // Get FD
+        const fd = await db
+            .selectFrom('fixed_deposits as fd')
+            .innerJoin('fixed_deposit_products as fp', 'fp.id', 'fd.product_id')
+            .select([
+                'fd.id',
+                'fd.member_id',
+                'fd.product_id',
+                'fd.principal_amount',
+                'fd.interest_rate',
+                'fd.interest_accrued',
+                'fd.interest_paid',
+                'fd.deposit_date',
+                'fd.maturity_date',
+                'fd.status',
+                'fp.tenure_days',
+                'fp.tenure_type',
+                'fp.allows_auto_rollover',
+            ])
+            .where('fd.id', '=', depositId)
+            .where('fd.deleted_at', 'is', null)
+            .executeTakeFirst();
+
+        if (!fd) {
+            throw new NotFoundError('FixedDeposit', depositId);
+        }
+
+        if (fd.status !== 'matured' && fd.status !== 'active') {
+            return c.json({
+                success: false,
+                error: { code: 'INVALID_STATUS', message: `Cannot rollover FD with status: ${fd.status}` },
+            }, 400);
+        }
+
+        const principal = Number(fd.principal_amount?.toString() || 0);
+        const accruedInterest = Number(fd.interest_accrued?.toString() || 0);
+
+        let newPrincipal = principal;
+        if (rolloverType === 'principal_plus_interest') {
+            newPrincipal = principal + accruedInterest;
+        }
+
+        // Calculate new maturity date
+        const newDepositDate = new Date();
+        const newMaturityDate = new Date(newDepositDate);
+        const tenureDays = Number(fd.tenure_days || 365);
+
+        if (fd.tenure_type === 'months') {
+            newMaturityDate.setMonth(newMaturityDate.getMonth() + tenureDays);
+        } else if (fd.tenure_type === 'years') {
+            newMaturityDate.setFullYear(newMaturityDate.getFullYear() + tenureDays);
+        } else {
+            newMaturityDate.setDate(newMaturityDate.getDate() + tenureDays);
+        }
+
+        const newCertNumber = `FD-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+
+        // Create new FD
+        const newFd = await db
+            .insertInto('fixed_deposits')
+            .values({
+                member_id: fd.member_id,
+                product_id: fd.product_id,
+                certificate_number: newCertNumber,
+                principal_amount: String(newPrincipal) as any,
+                interest_rate: fd.interest_rate as any,
+                deposit_date: newDepositDate as any,
+                maturity_date: newMaturityDate as any,
+                total_interest_payable: '0' as any,
+                interest_accrued: '0' as any,
+                interest_paid: '0' as any,
+                withholding_tax_amount: '0' as any,
+                status: 'active' as any,
+                maturity_action: 'manual_action_pending' as any,
+                recorded_by: user.id,
+            } as any)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+
+        // Record rollover
+        await db
+            .insertInto('fd_rollovers' as any)
+            .values({
+                original_fd_id: depositId,
+                new_fd_id: newFd.id,
+                rollover_type: rolloverType,
+                principal_rolled: String(newPrincipal),
+                interest_option: rolloverType === 'principal_plus_interest' ? 'reinvested' : 'credited_to_savings',
+                rollover_date: newDepositDate,
+                status: 'processed',
+                initiated_by: user.id,
+                processed_by: user.id,
+                processed_at: new Date(),
+            } as any)
+            .execute();
+
+        // Update original FD status
+        await db
+            .updateTable('fixed_deposits')
+            .set({ status: 'rolled_over' as any, updated_at: new Date() as any })
+            .where('id', '=', depositId)
+            .execute();
+
+        return c.json({
+            success: true,
+            data: {
+                original_fd_id: depositId,
+                new_fd_id: newFd.id,
+                rollover_type: rolloverType,
+                new_principal: newPrincipal.toFixed(2),
+                new_maturity_date: newMaturityDate.toISOString().split('T')[0],
+            },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// FD PRODUCT ANALYTICS
+// =============================================================================
+
+/**
+ * GET /fixed-deposits/products/:productId/analytics
+ * Get analytics for a specific FD product
+ */
+fixedDepositRoutes.get('/products/:productId/analytics', async (c) => {
+    try {
+        const { productId } = c.req.param();
+        const db = c.get('db')!;
+
+        const stats = await db
+            .selectFrom('fixed_deposits as fd')
+            .select([
+                db.fn.countAll().as('total_count'),
+                db.fn.sum('fd.principal_amount' as any).as('total_principal'),
+                db.fn.sum('fd.interest_accrued' as any).as('total_interest_accrued'),
+                db.fn.avg('fd.interest_rate' as any).as('average_interest_rate'),
+            ])
+            .where('fd.product_id', '=', productId)
+            .where('fd.deleted_at', 'is', null)
+            .executeTakeFirst();
+
+        const statusBreakdown = await db
+            .selectFrom('fixed_deposits as fd')
+            .select([
+                'fd.status',
+                db.fn.countAll().as('count'),
+                db.fn.sum('fd.principal_amount' as any).as('total_amount'),
+            ])
+            .where('fd.product_id', '=', productId)
+            .where('fd.deleted_at', 'is', null)
+            .groupBy('fd.status')
+            .execute();
+
+        return c.json({
+            success: true,
+            data: {
+                product_id: productId,
+                total_deposits: Number(stats?.total_count || 0),
+                total_principal: stats?.total_principal?.toString() || '0',
+                total_interest_accrued: stats?.total_interest_accrued?.toString() || '0',
+                average_interest_rate: stats?.average_interest_rate?.toString() || '0',
+                by_status: statusBreakdown.map(s => ({
+                    status: s.status,
+                    count: Number(s.count),
+                    total_amount: s.total_amount?.toString() || '0',
+                })),
+            },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
 // FD DETAILS - CATCH-ALL ROUTE (MUST BE LAST)
 // =============================================================================
 

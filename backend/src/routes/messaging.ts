@@ -62,10 +62,9 @@ const preferencesSchema = z.object({
     email_enabled: z.boolean().optional(),
     push_enabled: z.boolean().optional(),
     in_app_enabled: z.boolean().optional(),
-    marketing_opt_in: z.boolean().optional(),
+    promotional_messages: z.boolean().optional(),
     transaction_alerts: z.boolean().optional(),
-    loan_reminders: z.boolean().optional(),
-    preferred_language: z.string().optional(),
+    loan_related: z.boolean().optional(),
 });
 
 const scheduleMessageSchema = z.object({
@@ -93,6 +92,15 @@ messagingRoutes.post('/send', enforcePermission('messaging', 'create'), validate
         const data = getValidatedData<z.infer<typeof sendMessageSchema>>(c);
         const db = c.get('db')!;
         const user = c.get('user');
+
+        // Validate recipient is provided
+        if (!data.member_id && !data.recipient_phone && !data.recipient_email) {
+            return c.json({
+                success: false,
+                error: { code: 'MISSING_RECIPIENT', message: 'At least one of member_id, recipient_phone, or recipient_email is required' },
+            }, 400);
+        }
+
         const service = new MessagingService(db);
 
         const message = await service.sendMessage({
@@ -446,6 +454,53 @@ messagingRoutes.put('/templates/:templateId', enforcePermission('messaging', 'up
 });
 
 /**
+ * PATCH /messaging/templates/:templateId
+ * Partially update a message template (alias for PUT)
+ */
+messagingRoutes.patch('/templates/:templateId', enforcePermission('messaging', 'update'), validate(updateTemplateSchema), async (c) => {
+    try {
+        const { templateId } = c.req.param();
+        const data = getValidatedData<z.infer<typeof updateTemplateSchema>>(c);
+        const db = c.get('db')!;
+
+        const existing = await db
+            .selectFrom('message_templates')
+            .select('id')
+            .where('id', '=', templateId)
+            .where('deleted_at', 'is', null)
+            .executeTakeFirst();
+
+        if (!existing) {
+            throw new NotFoundError('MessageTemplate', templateId);
+        }
+
+        const updates: Record<string, any> = { updated_at: new Date().toISOString() };
+        if (data.code !== undefined) updates.code = data.code;
+        if (data.name !== undefined) updates.name = data.name;
+        if (data.channel !== undefined) updates.channel = data.channel;
+        if (data.body !== undefined) updates.body = data.body;
+        if (data.subject !== undefined) updates.subject = data.subject;
+        if (data.description !== undefined) updates.description = data.description;
+        if (data.merge_fields !== undefined) updates.merge_fields = JSON.stringify(data.merge_fields);
+        if (data.is_active !== undefined) updates.is_active = data.is_active;
+
+        const template = await db
+            .updateTable('message_templates')
+            .set(updates as any)
+            .where('id', '=', templateId)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+
+        return c.json({
+            success: true,
+            data: template,
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
  * DELETE /messaging/templates/:templateId
  * Soft delete a message template
  */
@@ -573,9 +628,9 @@ messagingRoutes.get('/preferences/:memberId', enforcePermission('messaging', 're
                     email_enabled: true,
                     push_enabled: true,
                     in_app_enabled: true,
-                    marketing_opt_in: false,
+                    promotional_messages: false,
                     transaction_alerts: true,
-                    loan_reminders: true,
+                    loan_related: true,
                 },
                 meta: { defaults: true },
             });
@@ -613,10 +668,9 @@ messagingRoutes.put('/preferences/:memberId', enforcePermission('messaging', 'up
             if (data.email_enabled !== undefined) updates.email_enabled = data.email_enabled;
             if (data.push_enabled !== undefined) updates.push_enabled = data.push_enabled;
             if (data.in_app_enabled !== undefined) updates.in_app_enabled = data.in_app_enabled;
-            if (data.marketing_opt_in !== undefined) updates.marketing_opt_in = data.marketing_opt_in;
+            if (data.promotional_messages !== undefined) updates.promotional_messages = data.promotional_messages;
             if (data.transaction_alerts !== undefined) updates.transaction_alerts = data.transaction_alerts;
-            if (data.loan_reminders !== undefined) updates.loan_reminders = data.loan_reminders;
-            if (data.preferred_language !== undefined) updates.preferred_language = data.preferred_language;
+            if (data.loan_related !== undefined) updates.loan_related = data.loan_related;
 
             result = await db
                 .updateTable('communication_preferences')
@@ -633,10 +687,9 @@ messagingRoutes.put('/preferences/:memberId', enforcePermission('messaging', 'up
                     email_enabled: data.email_enabled ?? true,
                     push_enabled: data.push_enabled ?? true,
                     in_app_enabled: data.in_app_enabled ?? true,
-                    marketing_opt_in: data.marketing_opt_in ?? false,
+                    promotional_messages: data.promotional_messages ?? false,
                     transaction_alerts: data.transaction_alerts ?? true,
-                    loan_reminders: data.loan_reminders ?? true,
-                    preferred_language: data.preferred_language || null,
+                    loan_related: data.loan_related ?? true,
                 } as any)
                 .returningAll()
                 .executeTakeFirstOrThrow();
@@ -679,6 +732,342 @@ messagingRoutes.post('/schedule', enforcePermission('messaging', 'create'), vali
         }, 201);
     } catch (error) {
         throw error;
+    }
+});
+
+// =============================================================================
+// SINGLE MESSAGE RETRIEVAL
+// =============================================================================
+
+/**
+ * GET /messaging/messages/:messageId
+ * Get a single message status/details
+ */
+messagingRoutes.get('/messages/:messageId', enforcePermission('messaging', 'read'), async (c) => {
+    try {
+        const { messageId } = c.req.param();
+        const db = c.get('db')!;
+
+        const message = await db
+            .selectFrom('messages')
+            .selectAll()
+            .where('id', '=', messageId)
+            .executeTakeFirst();
+
+        if (!message) {
+            throw new NotFoundError('Message', messageId);
+        }
+
+        return c.json({ success: true, data: message });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * GET /messaging/messages
+ * List all messages with optional filters
+ */
+messagingRoutes.get('/messages', enforcePermission('messaging', 'read'), async (c) => {
+    try {
+        const db = c.get('db')!;
+        const channel = c.req.query('channel');
+        const status = c.req.query('status');
+        const limit = parseInt(c.req.query('limit') || '20', 10);
+        const offset = parseInt(c.req.query('offset') || '0', 10);
+
+        let query = db.selectFrom('messages').selectAll();
+
+        if (channel) {
+            query = query.where('channel', '=', channel as any);
+        }
+        if (status) {
+            query = query.where('status', '=', status as any);
+        }
+
+        const messages = await query
+            .orderBy('created_at', 'desc')
+            .limit(limit)
+            .offset(offset)
+            .execute();
+
+        return c.json({
+            success: true,
+            data: messages,
+            meta: { count: messages.length, limit, offset },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// CAMPAIGN STATUS
+// =============================================================================
+
+/**
+ * GET /messaging/campaigns/:campaignId/status
+ * Get campaign delivery status
+ */
+messagingRoutes.get('/campaigns/:campaignId/status', enforcePermission('messaging', 'read'), async (c) => {
+    try {
+        const { campaignId } = c.req.param();
+        const db = c.get('db')!;
+
+        const campaign = await db
+            .selectFrom('bulk_campaigns')
+            .selectAll()
+            .where('id', '=', campaignId)
+            .executeTakeFirst();
+
+        if (!campaign) {
+            throw new NotFoundError('Campaign', campaignId);
+        }
+
+        return c.json({
+            success: true,
+            data: {
+                id: campaign.id,
+                name: campaign.name,
+                status: campaign.status,
+                total_recipients: campaign.recipient_count,
+                sent_count: campaign.messages_sent,
+                failed_count: campaign.messages_failed,
+            },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// SCHEDULED MESSAGE LISTING & CANCELLATION
+// =============================================================================
+
+/**
+ * GET /messaging/scheduled
+ * List scheduled messages
+ */
+messagingRoutes.get('/scheduled', enforcePermission('messaging', 'read'), async (c) => {
+    try {
+        const db = c.get('db')!;
+
+        const messages = await db
+            .selectFrom('messages')
+            .selectAll()
+            .where('scheduled_for', 'is not', null)
+            .where('status', 'in', ['draft', 'queued'] as any)
+            .orderBy('scheduled_for', 'asc')
+            .execute();
+
+        return c.json({
+            success: true,
+            data: messages,
+            meta: { count: messages.length },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * DELETE /messaging/scheduled/:messageId
+ * Cancel a scheduled message
+ */
+messagingRoutes.delete('/scheduled/:messageId', enforcePermission('messaging', 'delete'), async (c) => {
+    try {
+        const { messageId } = c.req.param();
+        const db = c.get('db')!;
+
+        const message = await db
+            .selectFrom('messages')
+            .select(['id', 'status', 'scheduled_for'])
+            .where('id', '=', messageId)
+            .executeTakeFirst();
+
+        if (!message) {
+            throw new NotFoundError('Message', messageId);
+        }
+
+        await db
+            .updateTable('messages')
+            .set({ status: 'failed' as any, failed_reason: 'Cancelled by user' } as any)
+            .where('id', '=', messageId)
+            .execute();
+
+        return c.json({
+            success: true,
+            data: { id: messageId, cancelled: true },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// MEMBER PREFERENCES (ALTERNATE PATH)
+// =============================================================================
+
+/**
+ * GET /messaging/members/:memberId/preferences
+ * Get communication preferences for a member (alternate path)
+ */
+messagingRoutes.get('/members/:memberId/preferences', enforcePermission('messaging', 'read'), async (c) => {
+    try {
+        const { memberId } = c.req.param();
+        const db = c.get('db')!;
+
+        const preferences = await db
+            .selectFrom('communication_preferences')
+            .selectAll()
+            .where('member_id', '=', memberId)
+            .executeTakeFirst();
+
+        if (!preferences) {
+            return c.json({
+                success: true,
+                data: {
+                    member_id: memberId,
+                    sms_enabled: true,
+                    email_enabled: true,
+                    push_enabled: true,
+                    in_app_enabled: true,
+                    promotional_messages: false,
+                    transaction_alerts: true,
+                    loan_related: true,
+                },
+                meta: { defaults: true },
+            });
+        }
+
+        return c.json({ success: true, data: preferences });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * PUT /messaging/members/:memberId/preferences
+ * Upsert communication preferences for a member (alternate path)
+ */
+messagingRoutes.put('/members/:memberId/preferences', enforcePermission('messaging', 'update'), validate(preferencesSchema), async (c) => {
+    try {
+        const { memberId } = c.req.param();
+        const data = getValidatedData<z.infer<typeof preferencesSchema>>(c);
+        const db = c.get('db')!;
+
+        const existing = await db
+            .selectFrom('communication_preferences')
+            .select('id')
+            .where('member_id', '=', memberId)
+            .executeTakeFirst();
+
+        let result;
+        if (existing) {
+            const updates: Record<string, any> = { updated_at: new Date().toISOString() };
+            if (data.sms_enabled !== undefined) updates.sms_enabled = data.sms_enabled;
+            if (data.email_enabled !== undefined) updates.email_enabled = data.email_enabled;
+            if (data.push_enabled !== undefined) updates.push_enabled = data.push_enabled;
+            if (data.in_app_enabled !== undefined) updates.in_app_enabled = data.in_app_enabled;
+            if (data.promotional_messages !== undefined) updates.promotional_messages = data.promotional_messages;
+            if (data.transaction_alerts !== undefined) updates.transaction_alerts = data.transaction_alerts;
+            if (data.loan_related !== undefined) updates.loan_related = data.loan_related;
+
+            result = await db
+                .updateTable('communication_preferences')
+                .set(updates as any)
+                .where('member_id', '=', memberId)
+                .returningAll()
+                .executeTakeFirstOrThrow();
+        } else {
+            result = await db
+                .insertInto('communication_preferences')
+                .values({
+                    member_id: memberId,
+                    sms_enabled: data.sms_enabled ?? true,
+                    email_enabled: data.email_enabled ?? true,
+                    push_enabled: data.push_enabled ?? true,
+                    in_app_enabled: data.in_app_enabled ?? true,
+                    promotional_messages: data.promotional_messages ?? false,
+                    transaction_alerts: data.transaction_alerts ?? true,
+                    loan_related: data.loan_related ?? true,
+                } as any)
+                .returningAll()
+                .executeTakeFirstOrThrow();
+        }
+
+        return c.json({
+            success: true,
+            data: result,
+            meta: { upserted: true },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// MEMBER MESSAGE HISTORY
+// =============================================================================
+
+/**
+ * GET /messaging/members/:memberId/messages
+ * List messages for a specific member
+ */
+messagingRoutes.get('/members/:memberId/messages', enforcePermission('messaging', 'read'), async (c) => {
+    try {
+        const { memberId } = c.req.param();
+        const db = c.get('db')!;
+        const limit = parseInt(c.req.query('limit') || '20', 10);
+        const offset = parseInt(c.req.query('offset') || '0', 10);
+
+        const messages = await db
+            .selectFrom('messages')
+            .selectAll()
+            .where('member_id', '=', memberId)
+            .orderBy('created_at', 'desc')
+            .limit(limit)
+            .offset(offset)
+            .execute();
+
+        return c.json({
+            success: true,
+            data: messages,
+            meta: { count: messages.length, member_id: memberId },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// WEBHOOKS
+// =============================================================================
+
+/**
+ * POST /messaging/webhooks/delivery-status
+ * Handle delivery status webhook
+ */
+messagingRoutes.post('/webhooks/delivery-status', async (c) => {
+    try {
+        const body = await c.req.json().catch(() => ({}));
+        const db = c.get('db');
+
+        if (!body.message_id || !body.status) {
+            return c.json({ success: false, error: 'Missing message_id or status' }, 400);
+        }
+
+        if (db) {
+            await db
+                .updateTable('messages')
+                .set({ status: body.status as any, sent_at: body.delivered_at ? new Date(body.delivered_at) as any : undefined })
+                .where('id', '=', body.message_id)
+                .execute();
+        }
+
+        return c.json({ success: true });
+    } catch (error) {
+        return c.json({ success: false, error: 'Webhook processing failed' }, 400);
     }
 });
 
@@ -733,7 +1122,7 @@ messagingRoutes.get('/analytics/delivery-rates', enforcePermission('messaging', 
             .select([
                 'm.channel',
                 db.fn.countAll().as('total'),
-                db.fn.count('mdl.id').as('attempts'),
+                db.fn.countAll().as('attempts'),
             ])
             .groupBy('m.channel')
             .execute();

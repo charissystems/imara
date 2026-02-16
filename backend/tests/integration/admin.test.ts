@@ -52,13 +52,14 @@ describe('Admin API Endpoints', () => {
     describe('POST /admin/members - Create Member', () => {
         it('should create a new member', async () => {
             const memberNumber = `ADM-${Date.now().toString(36).slice(-6).toUpperCase()}`;
+            const suffix = Date.now().toString().slice(-6);
             const res = await app.request('/admin/members', {
                 method: 'POST',
                 headers,
                 body: JSON.stringify({
                     first_name: 'Admin',
                     last_name: 'CreatedMember',
-                    phone: '+254722000001',
+                    phone: `+2547${suffix}`,
                     email: `admin-member-${Date.now()}@integration-test.local`,
                     member_number: memberNumber,
                     joined_date: new Date().toISOString().split('T')[0],
@@ -111,6 +112,7 @@ describe('Admin API Endpoints', () => {
     describe('POST /admin/staff - Create Staff', () => {
         it('should create a new staff member', async () => {
             const staffNumber = `ADM-${Date.now().toString(36).slice(-4).toUpperCase()}`;
+            const staffSuffix = Date.now().toString().slice(-6);
             const res = await app.request('/admin/staff', {
                 method: 'POST',
                 headers,
@@ -119,7 +121,7 @@ describe('Admin API Endpoints', () => {
                     first_name: 'Admin',
                     last_name: 'CreatedStaff',
                     email: `admin-staff-${Date.now()}@integration-test.local`,
-                    phone: '+254733000001',
+                    phone: `+2547${staffSuffix}`,
                     position: 'Teller',
                     department: 'Operations',
                     hire_date: new Date().toISOString().split('T')[0],
