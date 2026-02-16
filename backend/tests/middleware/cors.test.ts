@@ -1,4 +1,5 @@
 // backend/tests/middleware/cors.test.ts
+/// <reference types="node" />
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const getAllowedOrigins = (env?: string): string[] => {
