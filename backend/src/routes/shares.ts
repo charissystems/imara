@@ -855,3 +855,313 @@ shareRoutes.get('/register/full', enforcePermission('shares', 'read'), async (c)
 });
 
 export default shareRoutes;
+
+// =============================================================================
+// ROUTE ALIASES AND ADDITIONAL ENDPOINTS
+// =============================================================================
+
+// Alias for purchases/:purchaseId - get single purchase
+shareRoutes.get('/purchases/:purchaseId', async (c) => {
+    try {
+        const { purchaseId } = c.req.param();
+        const db = c.get('db')!;
+
+        const purchase = await db
+            .selectFrom('share_purchases as sp')
+            .innerJoin('share_classes as sc', 'sc.id', 'sp.share_class_id')
+            .innerJoin('members as m', 'm.id', 'sp.member_id')
+            .select([
+                'sp.id',
+                'sp.member_id',
+                'sp.share_class_id',
+                'sp.quantity',
+                'sp.unit_price',
+                'sp.total_amount',
+                'sp.payment_method',
+                'sp.payment_reference',
+                'sp.purchase_date',
+                'sp.created_at',
+                'sc.name as share_class_name',
+                'sc.code as share_class_code',
+                'm.first_name',
+                'm.last_name',
+                'm.member_number',
+            ])
+            .where('sp.id', '=', purchaseId)
+            .executeTakeFirst();
+
+        if (!purchase) {
+            return c.json({ success: false, error: 'Purchase not found' }, 404);
+        }
+
+        return c.json({ success: true, data: purchase });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// Member holdings by member ID
+shareRoutes.get('/members/:memberId/holdings', async (c) => {
+    try {
+        const { memberId } = c.req.param();
+        const db = c.get('db')!;
+
+        const holdings = await db
+            .selectFrom('share_holdings as sh')
+            .innerJoin('share_classes as sc', 'sc.id', 'sh.share_class_id')
+            .select([
+                'sh.id',
+                'sh.member_id',
+                'sh.share_class_id',
+                'sh.quantity',
+                'sh.certificate_number',
+                'sc.name as share_class_name',
+                'sc.code as share_class_code',
+                'sc.par_value',
+            ])
+            .where('sh.member_id', '=', memberId)
+            .execute();
+
+        return c.json({ success: true, data: holdings });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// Member share transactions
+shareRoutes.get('/members/:memberId/transactions', async (c) => {
+    try {
+        const { memberId } = c.req.param();
+        const db = c.get('db')!;
+
+        const purchases = await db
+            .selectFrom('share_purchases as sp')
+            .innerJoin('share_classes as sc', 'sc.id', 'sp.share_class_id')
+            .select([
+                'sp.id',
+                'sp.purchase_date as transaction_date',
+                db.raw("'purchase'").as('transaction_type'),
+                'sp.quantity',
+                'sp.unit_price',
+                'sp.total_amount',
+                'sc.name as share_class_name',
+            ])
+            .where('sp.member_id', '=', memberId)
+            .execute();
+
+        return c.json({ success: true, data: purchases });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// Transfer details by transfer ID  
+shareRoutes.get('/transfers/:transferId', async (c) => {
+    try {
+        const { transferId } = c.req.param();
+        const db = c.get('db')!;
+
+        const transfer = await db
+            .selectFrom('share_transfers as st')
+            .innerJoin('share_classes as sc', 'sc.id', 'st.share_class_id')
+            .select([
+                'st.id',
+                'st.from_member_id',
+                'st.to_member_id',
+                'st.share_class_id',
+                'st.quantity',
+                'st.transfer_price',
+                'st.total_amount',
+                'st.transfer_date',
+                'st.status',
+                'sc.name as share_class_name',
+            ])
+            .where('st.id', '=', transferId)
+            .executeTakeFirst();
+
+        if (!transfer) {
+            return c.json({ success: false, error: 'Transfer not found' }, 404);
+        }
+
+        return c.json({ success: true, data: transfer });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// Dividend declarations list (alias to /dividends)
+shareRoutes.get('/dividends/declarations', async (c) => {
+    try {
+        const db = c.get('db')!;
+        const status = c.req.query('status');
+
+        let query = db
+            .selectFrom('dividend_declarations as dd')
+            .innerJoin('share_classes as sc', 'sc.id', 'dd.share_class_id')
+            .select([
+                'dd.id',
+                'dd.share_class_id',
+                'dd.dividend_per_share',
+                'dd.record_date',
+                'dd.payment_date',
+                'dd.declaration_date',
+                'dd.total_dividend_amount',
+                'dd.withholding_tax_rate',
+                'dd.status',
+                'sc.name as share_class_name',
+                'sc.code as share_class_code',
+            ])
+            .orderBy('dd.declaration_date', 'desc');
+
+        if (status) {
+            query = query.where('dd.status', '=', status as any);
+        }
+
+        const declarations = await query.execute();
+
+        return c.json({ success: true, data: declarations });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// Single dividend declaration
+shareRoutes.get('/dividends/declarations/:declarationId', async (c) => {
+    try {
+        const { declarationId } = c.req.param();
+        const db = c.get('db')!;
+
+        const declaration = await db
+            .selectFrom('dividend_declarations as dd')
+            .innerJoin('share_classes as sc', 'sc.id', 'dd.share_class_id')
+            .select([
+                'dd.id',
+                'dd.share_class_id',
+                'dd.dividend_per_share',
+                'dd.record_date',
+                'dd.payment_date',
+                'dd.declaration_date',
+                'dd.total_dividend_amount',
+                'dd.withholding_tax_rate',
+                'dd.status',
+                'sc.name as share_class_name',
+            ])
+            .where('dd.id', '=', declarationId)
+            .executeTakeFirst();
+
+        if (!declaration) {
+            return c.json({ success: false, error: 'Declaration not found' }, 404);
+        }
+
+        return c.json({ success: true, data: declaration });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// Approve dividend declaration (alias to /dividends/:dividendId/approve)
+shareRoutes.post('/dividends/declarations/:declarationId/approve', async (c) => {
+    try {
+        const { declarationId } = c.req.param();
+        const db = c.get('db')!;
+
+        const updated = await db
+            .updateTable('dividend_declarations')
+            .set({
+                status: 'approved',
+                updated_at: new Date(),
+            })
+            .where('id', '=', declarationId)
+            .returning(['id', 'status'])
+            .executeTakeFirst();
+
+        if (!updated) {
+            return c.json({ success: false, error: 'Declaration not found' }, 404);
+        }
+
+        return c.json({ success: true, data: updated });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// Member certificate
+shareRoutes.get('/members/:memberId/certificate', async (c) => {
+    try {
+        const { memberId } = c.req.param();
+        const db = c.get('db')!;
+
+        const member = await db
+            .selectFrom('members')
+            .select(['id', 'first_name', 'last_name', 'member_number'])
+            .where('id', '=', memberId)
+            .executeTakeFirst();
+
+        if (!member) {
+            return c.json({ success: false, error: 'Member not found' }, 404);
+        }
+
+        const holdings = await db
+            .selectFrom('share_holdings as sh')
+            .innerJoin('share_classes as sc', 'sc.id', 'sh.share_class_id')
+            .select([
+                'sh.quantity',
+                'sh.certificate_number',
+                'sc.name as share_class_name',
+                'sc.par_value',
+            ])
+            .where('sh.member_id', '=', memberId)
+            .execute();
+
+        return c.json({
+            success: true,
+            data: {
+                member_id: member.id,
+                member_name: `${member.first_name} ${member.last_name}`,
+                member_number: member.member_number,
+                holdings,
+            },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// Share class analytics
+shareRoutes.get('/classes/:classId/analytics', async (c) => {
+    try {
+        const { classId } = c.req.param();
+        const db = c.get('db')!;
+
+        const stats = await db
+            .selectFrom('share_holdings')
+            .select([
+                db.fn.countAll().as('total_holders'),
+                db.fn.sum('quantity' as any).as('total_shares'),
+            ])
+            .where('share_class_id', '=', classId)
+            .executeTakeFirst();
+
+        const purchases = await db
+            .selectFrom('share_purchases')
+            .select([
+                db.fn.countAll().as('total_purchases'),
+                db.fn.sum('total_amount' as any).as('total_value'),
+            ])
+            .where('share_class_id', '=', classId)
+            .executeTakeFirst();
+
+        return c.json({
+            success: true,
+            data: {
+                share_class_id: classId,
+                total_holders: Number(stats?.total_holders || 0),
+                total_shares: Number(stats?.total_shares || 0),
+                total_purchases: Number(purchases?.total_purchases || 0),
+                total_value: purchases?.total_value?.toString() || '0',
+            },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
