@@ -268,84 +268,6 @@ fixedDepositRoutes.get('/', async (c) => {
 });
 
 /**
- * GET /fixed-deposits/:depositId
- * Get FD details with interest schedule
- */
-fixedDepositRoutes.get('/:depositId', async (c) => {
-    try {
-        const { depositId } = c.req.param();
-        const db = c.get('db')!;
-
-        const deposit = await db
-            .selectFrom('fixed_deposits as fd')
-            .innerJoin('fixed_deposit_products as fp', 'fp.id', 'fd.product_id')
-            .innerJoin('members as m', 'm.id', 'fd.member_id')
-            .select([
-                'fd.id',
-                'fd.member_id',
-                'fd.product_id',
-                'fd.certificate_number',
-                'fd.principal_amount',
-                'fd.interest_rate',
-                'fd.deposit_date',
-                'fd.maturity_date',
-                'fd.interest_accrued',
-                'fd.interest_paid',
-                'fd.withholding_tax_amount',
-                'fd.status',
-                'fd.maturity_action',
-                'fd.maturity_action_date',
-                'fd.created_at',
-                'fp.name as product_name',
-                'fp.code as product_code',
-                'fp.tenure_days',
-                'fp.tenure_type',
-                'fp.interest_paid_frequency',
-                'fp.allows_premature_withdrawal',
-                'fp.allows_auto_rollover',
-                'm.first_name',
-                'm.last_name',
-                'm.member_number',
-                'm.email',
-            ])
-            .where('fd.id', '=', depositId)
-            .where('fd.deleted_at', 'is', null)
-            .executeTakeFirst();
-
-        if (!deposit) {
-            throw new NotFoundError('FixedDeposit', depositId);
-        }
-
-        // Get interest schedule
-        const interestSchedule = await db
-            .selectFrom('fd_interest_schedules')
-            .selectAll()
-            .where('fixed_deposit_id', '=', depositId)
-            .orderBy('interest_period_number', 'asc')
-            .execute();
-
-        // Get rollovers
-        const rollovers = await db
-            .selectFrom('fd_rollovers')
-            .selectAll()
-            .where('original_fd_id', '=', depositId)
-            .orderBy('rollover_date', 'desc')
-            .execute();
-
-        return c.json({
-            success: true,
-            data: {
-                ...deposit,
-                interestSchedule,
-                rollovers,
-            },
-        });
-    } catch (error) {
-        throw error;
-    }
-});
-
-/**
  * POST /fixed-deposits/open
  * Open a new fixed deposit
  */
@@ -922,6 +844,195 @@ fixedDepositRoutes.get('/ledger', enforcePermission('fixed_deposits', 'read'), a
                 total,
                 total_pages: Math.ceil(total / limit),
                 status_filter: statusFilter || 'all',
+            },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// FD ANALYTICS (FD-013)
+// =============================================================================
+
+/**
+ * GET /fixed-deposits/analytics
+ * Get FD portfolio analytics and statistics
+ */
+fixedDepositRoutes.get('/analytics', enforcePermission('fixed_deposits', 'read'), async (c) => {
+    try {
+        const db = c.get('db')!;
+
+        // Get overall statistics
+        const stats = await db
+            .selectFrom('fixed_deposits as fd')
+            .select([
+                db.fn.countAll().as('total_count'),
+                db.fn.sum('fd.principal_amount' as any).as('total_principal'),
+                db.fn.sum('fd.interest_accrued' as any).as('total_interest_accrued'),
+                db.fn.sum('fd.interest_paid' as any).as('total_interest_paid'),
+                db.fn.avg('fd.interest_rate' as any).as('average_interest_rate'),
+            ])
+            .where('fd.deleted_at', 'is', null)
+            .executeTakeFirst();
+
+        // Get status breakdown
+        const statusBreakdown = await db
+            .selectFrom('fixed_deposits as fd')
+            .select([
+                'fd.status',
+                db.fn.countAll().as('count'),
+                db.fn.sum('fd.principal_amount' as any).as('total_amount'),
+            ])
+            .where('fd.deleted_at', 'is', null)
+            .groupBy('fd.status')
+            .execute();
+
+        // Get product breakdown
+        const productBreakdown = await db
+            .selectFrom('fixed_deposits as fd')
+            .innerJoin('fixed_deposit_products as fp', 'fp.id', 'fd.product_id')
+            .select([
+                'fp.id as product_id',
+                'fp.name as product_name',
+                'fp.code as product_code',
+                db.fn.countAll().as('count'),
+                db.fn.sum('fd.principal_amount' as any).as('total_amount'),
+            ])
+            .where('fd.deleted_at', 'is', null)
+            .groupBy(['fp.id', 'fp.name', 'fp.code'])
+            .execute();
+
+        // Get maturing soon count (next 30 days)
+        const now = new Date();
+        const thirtyDaysFromNow = new Date(now);
+        thirtyDaysFromNow.setDate(thirtyDaysFromNow.getDate() + 30);
+
+        const maturingSoon = await db
+            .selectFrom('fixed_deposits as fd')
+            .select([
+                db.fn.countAll().as('count'),
+                db.fn.sum('fd.principal_amount' as any).as('total_amount'),
+            ])
+            .where('fd.maturity_date', '<=', thirtyDaysFromNow as any)
+            .where('fd.maturity_date', '>=', now as any)
+            .where('fd.status', '=', 'active' as any)
+            .where('fd.deleted_at', 'is', null)
+            .executeTakeFirst();
+
+        return c.json({
+            success: true,
+            data: {
+                overall: {
+                    total_deposits: Number(stats?.total_count || 0),
+                    total_principal: stats?.total_principal?.toString() || '0',
+                    total_interest_accrued: stats?.total_interest_accrued?.toString() || '0',
+                    total_interest_paid: stats?.total_interest_paid?.toString() || '0',
+                    average_interest_rate: stats?.average_interest_rate?.toString() || '0',
+                },
+                by_status: statusBreakdown.map(s => ({
+                    status: s.status,
+                    count: Number(s.count),
+                    total_amount: s.total_amount?.toString() || '0',
+                })),
+                by_product: productBreakdown.map(p => ({
+                    product_id: p.product_id,
+                    product_name: p.product_name,
+                    product_code: p.product_code,
+                    count: Number(p.count),
+                    total_amount: p.total_amount?.toString() || '0',
+                })),
+                maturing_soon: {
+                    count: Number(maturingSoon?.count || 0),
+                    total_amount: maturingSoon?.total_amount?.toString() || '0',
+                    days_window: 30,
+                },
+            },
+            meta: {
+                generated_at: now.toISOString(),
+            },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+// =============================================================================
+// FD DETAILS - CATCH-ALL ROUTE (MUST BE LAST)
+// =============================================================================
+
+/**
+ * GET /fixed-deposits/:depositId
+ * Get FD details with interest schedule
+ * NOTE: This route must be defined AFTER all specific routes to avoid conflicts
+ */
+fixedDepositRoutes.get('/:depositId', async (c) => {
+    try {
+        const { depositId } = c.req.param();
+        const db = c.get('db')!;
+
+        const deposit = await db
+            .selectFrom('fixed_deposits as fd')
+            .innerJoin('fixed_deposit_products as fp', 'fp.id', 'fd.product_id')
+            .innerJoin('members as m', 'm.id', 'fd.member_id')
+            .select([
+                'fd.id',
+                'fd.member_id',
+                'fd.product_id',
+                'fd.certificate_number',
+                'fd.principal_amount',
+                'fd.interest_rate',
+                'fd.deposit_date',
+                'fd.maturity_date',
+                'fd.interest_accrued',
+                'fd.interest_paid',
+                'fd.withholding_tax_amount',
+                'fd.status',
+                'fd.maturity_action',
+                'fd.maturity_action_date',
+                'fd.created_at',
+                'fp.name as product_name',
+                'fp.code as product_code',
+                'fp.tenure_days',
+                'fp.tenure_type',
+                'fp.interest_paid_frequency',
+                'fp.allows_premature_withdrawal',
+                'fp.allows_auto_rollover',
+                'm.first_name',
+                'm.last_name',
+                'm.member_number',
+                'm.email',
+            ])
+            .where('fd.id', '=', depositId)
+            .where('fd.deleted_at', 'is', null)
+            .executeTakeFirst();
+
+        if (!deposit) {
+            throw new NotFoundError('FixedDeposit', depositId);
+        }
+
+        // Get interest schedule
+        const interestSchedule = await db
+            .selectFrom('fd_interest_schedules')
+            .selectAll()
+            .where('fixed_deposit_id', '=', depositId)
+            .orderBy('interest_period_number', 'asc')
+            .execute();
+
+        // Get rollovers
+        const rollovers = await db
+            .selectFrom('fd_rollovers')
+            .selectAll()
+            .where('original_fd_id', '=', depositId)
+            .orderBy('rollover_date', 'desc')
+            .execute();
+
+        return c.json({
+            success: true,
+            data: {
+                ...deposit,
+                interestSchedule,
+                rollovers,
             },
         });
     } catch (error) {
