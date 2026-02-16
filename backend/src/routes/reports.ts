@@ -256,7 +256,7 @@ reportRoutes.get('/financial/cash-flow/export', validate(periodSchema, 'query'),
 
 // ── Member Listing ──
 
-reportRoutes.get('/operational/members', async (c) => {
+reportRoutes.get('/operational/member-listing', async (c) => {
     const status = c.req.query('status') as any;
     const search = c.req.query('search');
     const limit = c.req.query('limit') ? parseInt(c.req.query('limit')!, 10) : undefined;
@@ -267,7 +267,7 @@ reportRoutes.get('/operational/members', async (c) => {
     return c.json({ success: true, data: report.data, meta: { total: report.total } });
 });
 
-reportRoutes.get('/operational/members/export', async (c) => {
+reportRoutes.get('/operational/member-listing/export', async (c) => {
     const format = (c.req.query('format') || 'pdf') as ExportFormat;
     if (!['pdf', 'excel', 'csv'].includes(format)) throw new ValidationError('Invalid export format');
 
@@ -289,13 +289,13 @@ reportRoutes.get('/operational/members/export', async (c) => {
 
 // ── Savings Summary ──
 
-reportRoutes.get('/operational/savings', async (c) => {
+reportRoutes.get('/operational/savings-summary', async (c) => {
     const service = getService(c);
     const report = await service.generateSavingsSummary(getUserId(c));
     return c.json({ success: true, data: report });
 });
 
-reportRoutes.get('/operational/savings/export', async (c) => {
+reportRoutes.get('/operational/savings-summary/export', async (c) => {
     const format = (c.req.query('format') || 'pdf') as ExportFormat;
     if (!['pdf', 'excel', 'csv'].includes(format)) throw new ValidationError('Invalid export format');
 
@@ -317,13 +317,13 @@ reportRoutes.get('/operational/savings/export', async (c) => {
 
 // ── Loan Portfolio ──
 
-reportRoutes.get('/operational/loans', async (c) => {
+reportRoutes.get('/operational/loan-portfolio', async (c) => {
     const service = getService(c);
     const report = await service.generateLoanPortfolio(getUserId(c));
     return c.json({ success: true, data: report });
 });
 
-reportRoutes.get('/operational/loans/export', async (c) => {
+reportRoutes.get('/operational/loan-portfolio/export', async (c) => {
     const format = (c.req.query('format') || 'pdf') as ExportFormat;
     if (!['pdf', 'excel', 'csv'].includes(format)) throw new ValidationError('Invalid export format');
 
@@ -345,13 +345,13 @@ reportRoutes.get('/operational/loans/export', async (c) => {
 
 // ── Arrears Ageing ──
 
-reportRoutes.get('/operational/arrears', async (c) => {
+reportRoutes.get('/operational/arrears-ageing', async (c) => {
     const service = getService(c);
     const report = await service.generateArrearsAgeing(getUserId(c));
     return c.json({ success: true, data: report });
 });
 
-reportRoutes.get('/operational/arrears/export', async (c) => {
+reportRoutes.get('/operational/arrears-ageing/export', async (c) => {
     const format = (c.req.query('format') || 'pdf') as ExportFormat;
     if (!['pdf', 'excel', 'csv'].includes(format)) throw new ValidationError('Invalid export format');
 
@@ -373,13 +373,13 @@ reportRoutes.get('/operational/arrears/export', async (c) => {
 
 // ── NPL Report ──
 
-reportRoutes.get('/operational/npl', async (c) => {
+reportRoutes.get('/operational/npl-report', async (c) => {
     const service = getService(c);
     const report = await service.generateNplReport(getUserId(c));
     return c.json({ success: true, data: report });
 });
 
-reportRoutes.get('/operational/npl/export', async (c) => {
+reportRoutes.get('/operational/npl-report/export', async (c) => {
     const format = (c.req.query('format') || 'pdf') as ExportFormat;
     if (!['pdf', 'excel', 'csv'].includes(format)) throw new ValidationError('Invalid export format');
 
