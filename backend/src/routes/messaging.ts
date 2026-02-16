@@ -683,3 +683,121 @@ messagingRoutes.post('/schedule', enforcePermission('messaging', 'create'), vali
 });
 
 export default messagingRoutes;
+
+// =============================================================================
+// ANALYTICS
+// =============================================================================
+
+/**
+ * GET /messaging/analytics/summary
+ * Get messaging analytics summary
+ */
+messagingRoutes.get('/analytics/summary', enforcePermission('messaging', 'read'), async (c) => {
+    try {
+        const db = c.get('db')!;
+        
+        const stats = await db
+            .selectFrom('message_delivery_log')
+            .select([
+                db.fn.countAll().as('total_messages'),
+                db.fn.count('id').as('delivered'),
+            ])
+            .executeTakeFirst();
+
+        return c.json({
+            success: true,
+            data: {
+                total_messages: Number(stats?.total_messages || 0),
+                delivered: Number(stats?.delivered || 0),
+                delivery_rate: Number(stats?.total_messages) > 0 
+                    ? (Number(stats?.delivered) / Number(stats?.total_messages) * 100).toFixed(2)
+                    : '0',
+            },
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * GET /messaging/analytics/delivery-rates
+ * Get message delivery rates by channel
+ */
+messagingRoutes.get('/analytics/delivery-rates', enforcePermission('messaging', 'read'), async (c) => {
+    try {
+        const db = c.get('db')!;
+
+        const rates = await db
+            .selectFrom('message_delivery_log')
+            .select([
+                'channel',
+                db.fn.countAll().as('total'),
+                db.fn.count('id').as('delivered'),
+            ])
+            .groupBy('channel')
+            .execute();
+
+        return c.json({
+            success: true,
+            data: rates.map(r => ({
+                channel: r.channel,
+                total: Number(r.total),
+                delivered: Number(r.delivered),
+                delivery_rate: Number(r.total) > 0 
+                    ? (Number(r.delivered) / Number(r.total) * 100).toFixed(2)
+                    : '0',
+            })),
+        });
+    } catch (error) {
+        throw error;
+    }
+});
+
+/**
+ * GET /messaging/analytics/channel-performance
+ * Get performance metrics by channel
+ */
+messagingRoutes.get('/analytics/channel-performance', enforcePermission('messaging', 'read'), async (c) => {
+    try {
+        const db = c.get('db')!;
+
+        const performance = await db
+            .selectFrom('message_delivery_log')
+            .select([
+                'channel',
+                db.fn.countAll().as('count'),
+                'status',
+            ])
+            .groupBy(['channel', 'status'])
+            .execute();
+
+        const channelStats = new Map<string, any>();
+        
+        for (const row of performance) {
+            if (!channelStats.has(row.channel)) {
+                channelStats.set(row.channel, {
+                    channel: row.channel,
+                    total: 0,
+                    delivered: 0,
+                    failed: 0,
+                    pending: 0,
+                });
+            }
+            
+            const stats = channelStats.get(row.channel);
+            const count = Number(row.count);
+            stats.total += count;
+            
+            if (row.status === 'delivered') stats.delivered += count;
+            else if (row.status === 'failed') stats.failed += count;
+            else if (row.status === 'pending') stats.pending += count;
+        }
+
+        return c.json({
+            success: true,
+            data: Array.from(channelStats.values()),
+        });
+    } catch (error) {
+        throw error;
+    }
+});
