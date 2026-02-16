@@ -16,5 +16,23 @@ export default defineConfig({
         fileParallelism: false,
         // Setup files run before each test file
         setupFiles: ['./tests/setup.ts'],
+        coverage: {
+            provider: 'v8',
+            reporter: ['text', 'html', 'clover', 'json'],
+            reportsDirectory: './coverage',
+            include: ['src/**/*.ts'],
+            exclude: [
+                'src/**/*.d.ts',
+                'src/database/migrations/**',
+                'src/database/migrations-public/**',
+                'src/database/types/**',
+            ],
+            thresholds: {
+                lines: 70,
+                functions: 70,
+                branches: 60,
+                statements: 70,
+            },
+        },
     },
 });
