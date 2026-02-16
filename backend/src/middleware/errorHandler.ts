@@ -151,7 +151,13 @@ export const errorHandler = async (err: Error, c: Context) => {
         ...(err instanceof AppError && { code: err.code }),
     };
 
-    appLogger.error('Unhandled error', err as Error, meta);
+    // Only log validation errors at debug level, as they're expected user input issues
+    if (err instanceof ValidationError) {
+        // Don't log validation errors as they're expected user input issues
+        // appLogger.debug('Validation error', err as Error, meta);
+    } else {
+        appLogger.error('Unhandled error', err as Error, meta);
+    }
 
     const response = formatErrorResponse(err, c);
     
