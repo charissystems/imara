@@ -728,13 +728,14 @@ messagingRoutes.get('/analytics/delivery-rates', enforcePermission('messaging', 
         const db = c.get('db')!;
 
         const rates = await db
-            .selectFrom('message_delivery_log')
+            .selectFrom('message_delivery_log as mdl')
+            .innerJoin('messages as m', 'm.id', 'mdl.message_id')
             .select([
-                'channel',
+                'm.channel',
                 db.fn.countAll().as('total'),
-                db.fn.count('id').as('delivered'),
+                db.fn.count('mdl.id').as('attempts'),
             ])
-            .groupBy('channel')
+            .groupBy('m.channel')
             .execute();
 
         return c.json({
@@ -742,9 +743,9 @@ messagingRoutes.get('/analytics/delivery-rates', enforcePermission('messaging', 
             data: rates.map(r => ({
                 channel: r.channel,
                 total: Number(r.total),
-                delivered: Number(r.delivered),
+                attempts: Number(r.attempts),
                 delivery_rate: Number(r.total) > 0 
-                    ? (Number(r.delivered) / Number(r.total) * 100).toFixed(2)
+                    ? (Number(r.attempts) / Number(r.total) * 100).toFixed(2)
                     : '0',
             })),
         });
@@ -762,13 +763,14 @@ messagingRoutes.get('/analytics/channel-performance', enforcePermission('messagi
         const db = c.get('db')!;
 
         const performance = await db
-            .selectFrom('message_delivery_log')
+            .selectFrom('message_delivery_log as mdl')
+            .innerJoin('messages as m', 'm.id', 'mdl.message_id')
             .select([
-                'channel',
+                'm.channel',
                 db.fn.countAll().as('count'),
-                'status',
+                'mdl.status',
             ])
-            .groupBy(['channel', 'status'])
+            .groupBy(['m.channel', 'mdl.status'])
             .execute();
 
         const channelStats = new Map<string, any>();
@@ -780,7 +782,7 @@ messagingRoutes.get('/analytics/channel-performance', enforcePermission('messagi
                     total: 0,
                     delivered: 0,
                     failed: 0,
-                    pending: 0,
+                    sent: 0,
                 });
             }
             
@@ -790,7 +792,7 @@ messagingRoutes.get('/analytics/channel-performance', enforcePermission('messagi
             
             if (row.status === 'delivered') stats.delivered += count;
             else if (row.status === 'failed') stats.failed += count;
-            else if (row.status === 'pending') stats.pending += count;
+            else if (row.status === 'sent') stats.sent += count;
         }
 
         return c.json({
