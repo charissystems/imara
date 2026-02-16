@@ -292,7 +292,7 @@ reportRoutes.get('/operational/member-listing/export', async (c) => {
 reportRoutes.get('/operational/savings-summary', async (c) => {
     const service = getService(c);
     const report = await service.generateSavingsSummary(getUserId(c));
-    return c.json({ success: true, data: report });
+    return c.json({ success: true, data: report.data, meta: report.meta, totals: report.totals });
 });
 
 reportRoutes.get('/operational/savings-summary/export', async (c) => {
@@ -320,7 +320,7 @@ reportRoutes.get('/operational/savings-summary/export', async (c) => {
 reportRoutes.get('/operational/loan-portfolio', async (c) => {
     const service = getService(c);
     const report = await service.generateLoanPortfolio(getUserId(c));
-    return c.json({ success: true, data: report });
+    return c.json({ success: true, data: report.data, meta: report.meta, totals: report.totals });
 });
 
 reportRoutes.get('/operational/loan-portfolio/export', async (c) => {
@@ -348,7 +348,7 @@ reportRoutes.get('/operational/loan-portfolio/export', async (c) => {
 reportRoutes.get('/operational/arrears-ageing', async (c) => {
     const service = getService(c);
     const report = await service.generateArrearsAgeing(getUserId(c));
-    return c.json({ success: true, data: report });
+    return c.json({ success: true, data: report.data, meta: report.meta, totals: report.totals });
 });
 
 reportRoutes.get('/operational/arrears-ageing/export', async (c) => {
@@ -376,7 +376,7 @@ reportRoutes.get('/operational/arrears-ageing/export', async (c) => {
 reportRoutes.get('/operational/npl-report', async (c) => {
     const service = getService(c);
     const report = await service.generateNplReport(getUserId(c));
-    return c.json({ success: true, data: report });
+    return c.json({ success: true, data: report.data, meta: report.meta, totals: report.totals });
 });
 
 reportRoutes.get('/operational/npl-report/export', async (c) => {
@@ -409,7 +409,19 @@ reportRoutes.get('/operational/transactions', async (c) => {
 
     const service = getService(c);
     const report = await service.generateDailyTransactions(getUserId(c), date, { category, limit, offset });
-    return c.json({ success: true, data: report });
+    return c.json({ success: true, data: report.data, meta: report.meta, total: report.total, summary: report.summary });
+});
+
+// Alias for daily-transactions
+reportRoutes.get('/operational/daily-transactions', async (c) => {
+    const date = c.req.query('date') ? new Date(c.req.query('date')!) : new Date();
+    const category = c.req.query('category');
+    const limit = c.req.query('limit') ? parseInt(c.req.query('limit')!, 10) : undefined;
+    const offset = c.req.query('offset') ? parseInt(c.req.query('offset')!, 10) : undefined;
+
+    const service = getService(c);
+    const report = await service.generateDailyTransactions(getUserId(c), date, { category, limit, offset });
+    return c.json({ success: true, data: report.data, meta: report.meta, total: report.total, summary: report.summary });
 });
 
 reportRoutes.get('/operational/transactions/export', async (c) => {
@@ -459,3 +471,17 @@ reportRoutes.get('/dashboard/activity', async (c) => {
     const activity = await repo.getRecentActivity(limit);
     return c.json({ success: true, data: activity, meta: { count: activity.length } });
 });
+
+reportRoutes.get("/dashboard/alerts", async (c) => {
+    const service = getService(c);
+    const dashboard = await service.getDashboard(getUserId(c));
+    return c.json({ success: true, data: dashboard.alerts });
+});
+
+reportRoutes.get("/dashboard/trends", async (c) => {
+    const service = getService(c);
+    const dashboard = await service.getDashboard(getUserId(c));
+    // For now, return KPIs as trends data
+    return c.json({ success: true, data: dashboard.kpis });
+});
+
