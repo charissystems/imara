@@ -10,10 +10,10 @@ importers:
     dependencies:
       '@hono/node-server':
         specifier: ^1.19.9
-        version: 1.19.9(hono@4.11.5)
+        version: 1.19.9(hono@4.11.9)
       '@hono/zod-validator':
         specifier: ^0.7.6
-        version: 0.7.6(hono@4.11.5)(zod@4.3.6)
+        version: 0.7.6(hono@4.11.9)(zod@4.3.6)
       bcryptjs:
         specifier: ^2.4.3
         version: 2.4.3
@@ -30,8 +30,8 @@ importers:
         specifier: ^4.4.0
         version: 4.4.0
       hono:
-        specifier: ^4.11.5
-        version: 4.11.5
+        specifier: ^4.11.9
+        version: 4.11.9
       ioredis:
         specifier: ^5.9.3
         version: 5.9.3
@@ -39,8 +39,8 @@ importers:
         specifier: ^0.28.9
         version: 0.28.10
       nanoid:
-        specifier: ^5.1.6
-        version: 5.1.6
+        specifier: ^3.3.11
+        version: 3.3.11
       node-cron:
         specifier: ^4.2.1
         version: 4.2.1
@@ -802,8 +802,8 @@ packages:
     resolution: {integrity: sha512-EykJT/Q1KjTWctppgIAgfSO0tKVuZUjhgMr17kqTumMl6Afv3EISleU7qZUzoXDFTAHTDC4NOoG/ZxU3EvlMPQ==}
     engines: {node: '>=8'}
 
-  hono@4.11.5:
-    resolution: {integrity: sha512-WemPi9/WfyMwZs+ZUXdiwcCh9Y+m7L+8vki9MzDw3jJ+W9Lc+12HGsd368Qc1vZi1xwW8BWMMsnK5efYKPdt4g==}
+  hono@4.11.9:
+    resolution: {integrity: sha512-Eaw2YTGM6WOxA6CXbckaEvslr2Ne4NFsKrvc0v97JD5awbmeBLO5w9Ho9L9kmKonrwF9RJlW6BxT1PVv/agBHQ==}
     engines: {node: '>=16.9.0'}
 
   html-escaper@2.0.2:
@@ -964,11 +964,6 @@ packages:
   nanoid@3.3.11:
     resolution: {integrity: sha512-N8SpfPUnUp1bK+PMYW8qSWdl9U+wwNWI4QKxOYDy9JAro3WMX7p2OeVRF9v+347pnakNevPmiHhNmZ2HbFA76w==}
     engines: {node: ^10 || ^12 || ^13.7 || ^14 || >=15.0.1}
-    hasBin: true
-
-  nanoid@5.1.6:
-    resolution: {integrity: sha512-c7+7RQ+dMB5dPwwCp4ee1/iV/q2P6aK1mTZcfr1BTuVlyW9hJYiMPybJCcnBlQtuSmTIWNeazm/zqNoZSSElBg==}
-    engines: {node: ^18 || >=20}
     hasBin: true
 
   node-abort-controller@3.1.1:
@@ -1500,13 +1495,13 @@ snapshots:
       lodash.isundefined: 3.0.1
       lodash.uniq: 4.5.0
 
-  '@hono/node-server@1.19.9(hono@4.11.5)':
+  '@hono/node-server@1.19.9(hono@4.11.9)':
     dependencies:
-      hono: 4.11.5
+      hono: 4.11.9
 
-  '@hono/zod-validator@0.7.6(hono@4.11.5)(zod@4.3.6)':
+  '@hono/zod-validator@0.7.6(hono@4.11.9)(zod@4.3.6)':
     dependencies:
-      hono: 4.11.5
+      hono: 4.11.9
       zod: 4.3.6
 
   '@ioredis/commands@1.5.0': {}
@@ -2011,7 +2006,7 @@ snapshots:
 
   has-flag@4.0.0: {}
 
-  hono@4.11.5: {}
+  hono@4.11.9: {}
 
   html-escaper@2.0.2: {}
 
@@ -2180,8 +2175,6 @@ snapshots:
       msgpackr-extract: 3.0.3
 
   nanoid@3.3.11: {}
-
-  nanoid@5.1.6: {}
 
   node-abort-controller@3.1.1: {}
 

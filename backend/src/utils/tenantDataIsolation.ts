@@ -79,6 +79,10 @@ export function verifyTenantIsolation<T>(
  * Useful for complex queries that need manual WHERE clauses
  */
 export function getTenantFilter(tenantId: string, tableAlias?: string): Expression<boolean> {
+    // Validate tableAlias to prevent SQL injection via column name
+    if (tableAlias && !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(tableAlias)) {
+        throw new Error('Invalid table alias');
+    }
     const column = tableAlias ? `${tableAlias}.tenant_id` : 'tenant_id';
     return sql`${sql.raw(column)} = ${tenantId}`;
 }

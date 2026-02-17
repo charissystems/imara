@@ -1,6 +1,7 @@
 // src/routes/fixedDeposits.ts
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { nanoid } from 'nanoid';
 import { Env } from '../middleware/types';
 import { validate, getValidatedData, commonSchemas } from '../middleware/validation';
 import { NotFoundError, UnauthorizedError } from '../middleware/errorHandler';
@@ -343,7 +344,7 @@ fixedDepositRoutes.post('/open', validate(openFdSchema), async (c) => {
             maturityDate.setDate(maturityDate.getDate() + tenureDays);
         }
 
-        const certNumber = `FD-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+        const certNumber = `FD-${nanoid(12)}`;
 
         const fd = await db
             .insertInto('fixed_deposits')
@@ -1310,7 +1311,7 @@ fixedDepositRoutes.post('/:depositId/rollover', async (c) => {
             newMaturityDate.setDate(newMaturityDate.getDate() + tenureDays);
         }
 
-        const newCertNumber = `FD-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+        const newCertNumber = `FD-${nanoid(12)}`;
 
         // Create new FD
         const newFd = await db

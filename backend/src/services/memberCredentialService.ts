@@ -1,6 +1,6 @@
 import { Kysely } from 'kysely';
 import { TenantDatabase } from '../database/types';
-import { createHash, randomBytes } from 'crypto';
+import { createHash, randomBytes, randomInt } from 'crypto';
 
 export class MemberCredentialService {
     constructor(private db: Kysely<TenantDatabase>) {}
@@ -91,7 +91,7 @@ export class MemberCredentialService {
     }
 
     async resetPin(memberId: string, resetBy: string): Promise<{ temporary_pin: string }> {
-        const tempPin = String(Math.floor(1000 + Math.random() * 9000)); // 4-digit
+        const tempPin = String(randomInt(1000, 10000)); // 4-digit CSPRNG
         const salt = randomBytes(16).toString('hex');
         const pinHash = this.hashPin(tempPin, salt);
 

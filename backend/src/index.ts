@@ -5,6 +5,7 @@ import {
     authMiddleware, requestContext, auditMiddleware,
     cacheInvalidation,
 } from './middleware';
+import { securityHeadersMiddleware } from './middleware/securityHeaders';
 import { dbManager } from './config/database';
 import superAdminRoutes from './routes/superAdmin'; // Platform Admin
 import tenantAdminRoutes from './routes/admin';      // Tenant Admin
@@ -25,6 +26,7 @@ const app = createApp();
 app.onError(errorHandler);
 app.use('*', logger);
 app.use('*', requestContext);
+app.use('*', securityHeadersMiddleware);
 
 if (process.env.ENABLE_CORS === 'true') {
     app.use('*', corsMiddleware);

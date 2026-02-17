@@ -13,6 +13,7 @@
  */
 
 import Decimal from 'decimal.js';
+import { nanoid } from 'nanoid';
 import { Kysely } from 'kysely';
 import { TenantDatabase } from '../database/types';
 import { NotificationService } from './notificationService';
@@ -455,7 +456,7 @@ export class FixedDepositService {
         const newMaturityDate = new Date();
         newMaturityDate.setDate(newMaturityDate.getDate() + (fd.tenure_days as number));
 
-        const newCertNumber = `FD-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+        const newCertNumber = `FD-${nanoid(12)}`;
 
         // Create new FD
         const [newFd] = await this.db

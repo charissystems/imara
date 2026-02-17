@@ -25,6 +25,7 @@
  * - LON-028: Flag loans as NPL
  */
 
+import { nanoid } from 'nanoid';
 import { appLogger } from '../middleware/logger';
 
 /**
@@ -401,7 +402,7 @@ export class LoanService {
             remainingBalance -= principalAmount;
 
             const installment: LoanInstallment = {
-                id: `INST-${Math.random().toString(36).substring(7)}`,
+                id: `INST-${nanoid(12)}`,
                 loanAgreementId: '', // Will be set when creating loan
                 installmentNumber: month,
                 dueDate,

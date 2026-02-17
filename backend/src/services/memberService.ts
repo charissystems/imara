@@ -18,6 +18,8 @@
  * - MEM-019: Members download account statements in PDF
  */
 
+import { nanoid } from 'nanoid';
+import { randomInt } from 'crypto';
 import { appLogger } from '../middleware/logger';
 
 /**
@@ -107,10 +109,7 @@ export class MemberService {
      * Requirement: MEM-003
      */
     generateMemberNumber(prefix: string = 'MEM'): string {
-        const timestamp = Date.now();
-        const randomPart = Math.floor(Math.random() * 10000);
-        const sequential = String(timestamp + randomPart).padStart(6, '0');
-        return `${prefix}-${sequential}`;
+        return `${prefix}-${nanoid(12)}`;
     }
 
     /**
@@ -317,10 +316,7 @@ export class MemberService {
      * Generate unique account number
      */
     private generateAccountNumber(prefix: string): string {
-        const timestamp = Date.now();
-        const randomPart = Math.floor(Math.random() * 10000);
-        const sequential = String(timestamp + randomPart).padStart(8, '0');
-        return `${prefix}-${sequential}`;
+        return `${prefix}-${nanoid(12)}`;
     }
 
     /**
@@ -385,11 +381,11 @@ export class MemberService {
         // Username: first part of email or memberId
         const username = email.split('@')[0];
         
-        // Temporary password: random 12-character string
+        // Temporary password: random 12-character string using CSPRNG
         const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%';
         let tempPassword = '';
         for (let i = 0; i < 12; i++) {
-            tempPassword += chars.charAt(Math.floor(Math.random() * chars.length));
+            tempPassword += chars.charAt(randomInt(chars.length));
         }
 
         return { username, tempPassword };

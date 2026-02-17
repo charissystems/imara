@@ -1,5 +1,6 @@
 // src/middleware/audit.ts
 import { Context, Next } from 'hono';
+import { nanoid } from 'nanoid';
 import { Kysely } from 'kysely';
 import { Env } from './types';
 import { appLogger } from './logger';
@@ -124,7 +125,7 @@ export class AuditLogger {
      * Generate unique audit log ID
      */
     private generateAuditId(): string {
-        return `AUD-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+        return `AUD-${nanoid(12)}`;
     }
 
     /**
