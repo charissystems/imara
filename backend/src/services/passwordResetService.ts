@@ -148,8 +148,8 @@ export class PasswordResetService {
     ): Promise<ResetPasswordResult> {
         const redisKey = this.getRedisKey(token);
 
-        // Retrieve token data from Redis
-        const raw = await this.redis.get(redisKey);
+        // Atomically retrieve and delete the token to prevent race-condition reuse
+        const raw = await this.redis.getdel(redisKey);
         if (!raw) {
             return {
                 success: false,
@@ -175,9 +175,6 @@ export class PasswordResetService {
         const authRepo = new AuthRepository(this.schemaName);
         await authRepo.updatePassword(tokenData.staffId, passwordHash);
 
-        // Delete token (single-use)
-        await this.redis.del(redisKey);
-
         appLogger.success('Password reset completed', {
             staffId: tokenData.staffId,
             schema: this.schemaName,
@@ -196,13 +193,9 @@ export class PasswordResetService {
      */
     async validateToken(token: string): Promise<boolean> {
         const redisKey = this.getRedisKey(token);
-        // Atomically get and delete to prevent reuse / information leakage
-        const result = await this.redis.get(redisKey);
-        if (result) {
-            await this.redis.del(redisKey);
-            return true;
-        }
-        return false;
+        // Atomically get and delete to prevent reuse
+        const result = await this.redis.getdel(redisKey);
+        return result !== null;
     }
 
     // ──────────────────────────────────────────────

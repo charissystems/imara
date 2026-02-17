@@ -94,7 +94,7 @@ const updateSavingsProductSchema = z.object({
  * GET /accounts
  * List all accounts for current member (or all accounts if admin)
  */
-accountRoutes.get('/', async (c) => {
+accountRoutes.get('/', enforcePermission('savings', 'read'), async (c) => {
     try {
         const { schema_name } = c.get('tenant')!;
         const currentUser = c.get('user');
@@ -349,6 +349,11 @@ accountRoutes.post('/deposit', rateLimit({ maxRequests: 30, windowSeconds: 60, k
             throw new NotFoundError('Account', data.savings_account_id);
         }
 
+        // Validate that the member_id matches the account owner (prevent IDOR)
+        if (account.member_id !== data.member_id) {
+            throw new ValidationError('Member ID does not match the account owner');
+        }
+
         // Execute deposit atomically in a database transaction
         const db = getTenantDb(schema_name);
         const depositNumber = savingsService.generateTransactionReference();
@@ -459,6 +464,11 @@ accountRoutes.post('/withdrawal', rateLimit({ maxRequests: 20, windowSeconds: 60
         const account = await accountRepo.findById(data.savings_account_id);
         if (!account) {
             throw new NotFoundError('Account', data.savings_account_id);
+        }
+
+        // Validate that the member_id matches the account owner (prevent IDOR)
+        if (account.member_id !== data.member_id) {
+            throw new ValidationError('Member ID does not match the account owner');
         }
 
         // Authorization: member can only withdraw from own account
@@ -628,14 +638,18 @@ accountRoutes.patch('/withdrawals/:withdrawalId/approve', async (c) => {
     }
 });
 
+const rejectWithdrawalSchema = z.object({
+    rejection_reason: z.string().min(1, 'Rejection reason is required').max(500),
+});
+
 /**
  * PATCH /accounts/withdrawals/:withdrawalId/reject
  * Reject a pending withdrawal
  */
-accountRoutes.patch('/withdrawals/:withdrawalId/reject', async (c) => {
+accountRoutes.patch('/withdrawals/:withdrawalId/reject', validate(rejectWithdrawalSchema), async (c) => {
     try {
         const { withdrawalId } = c.req.param();
-        const body = await c.req.json();
+        const data = getValidatedData<z.infer<typeof rejectWithdrawalSchema>>(c);
         const { schema_name } = c.get('tenant')!;
         const user = c.get('user');
 
@@ -650,8 +664,16 @@ accountRoutes.patch('/withdrawals/:withdrawalId/reject', async (c) => {
             throw new NotFoundError('Withdrawal', withdrawalId);
         }
 
+        if (withdrawal.status !== 'pending') {
+            return c.json({
+                success: false,
+                error: { code: 'INVALID_STATUS', message: 'Only pending withdrawals can be rejected' }
+            }, 400);
+        }
+
         const updated = await accountRepo.updateWithdrawal(withdrawalId, {
             status: 'rejected',
+            rejection_reason: data.rejection_reason,
         } as any);
 
         return c.json({
@@ -1042,7 +1064,14 @@ accountRoutes.post('/batch-deposit', rateLimit({ maxRequests: 5, windowSeconds: 
  * POST /accounts/:accountId/post-interest
  * Post accrued interest to an account balance
  */
-accountRoutes.post('/:accountId/post-interest', async (c) => {
+const interestPostRateLimit = rateLimit({
+    maxRequests: 5,
+    windowSeconds: 60,
+    keyPrefix: 'rl:post-interest',
+    message: 'Too many interest posting requests. Please try again later.',
+});
+
+accountRoutes.post('/:accountId/post-interest', interestPostRateLimit, async (c) => {
     try {
         const { accountId } = c.req.param();
         const user = c.get('user');

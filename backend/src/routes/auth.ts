@@ -17,6 +17,7 @@ import { getTenantDb } from '../config/database';
 import { appLogger } from '../middleware/logger';
 import { blacklistToken } from '../services/tokenBlacklistService';
 import { loginRateLimit, registerRateLimit, passwordResetRateLimit, otpRateLimit, rateLimit } from '../middleware/rateLimiter';
+import { enforcePermission } from '../middleware/rbac';
 
 export const authRoutes = new Hono<Env>();
 
@@ -183,7 +184,7 @@ authRoutes.post('/login', loginRateLimit, validate(loginSchema), async (c) => {
                 },
             },
             meta: {
-                tokenExpiresIn: `${authService.getTokenExpirationHours()}h`,
+                tokenExpiresIn: `${authService.getTokenExpirationMinutes()}m`,
                 tenant: tenantCode,
             },
         });
@@ -196,7 +197,7 @@ authRoutes.post('/login', loginRateLimit, validate(loginSchema), async (c) => {
  * POST /auth/register
  * Register a new staff member (typically admin only)
  */
-authRoutes.post('/register', registerRateLimit, validate(registerSchema), async (c) => {
+authRoutes.post('/register', enforcePermission('staff', 'create'), registerRateLimit, validate(registerSchema), async (c) => {
     try {
         const data = getValidatedData<z.infer<typeof registerSchema>>(c);
         const { schema_name, code: tenantCode } = c.get('tenant')!;
@@ -318,15 +319,10 @@ authRoutes.post('/refresh', refreshRateLimit, async (c) => {
         const refreshToken = bearerToken.substring(7);
         const authService = new AuthService();
 
-        // Verify refresh token
-        const payload = await authService.verifyToken(refreshToken);
+        // Verify refresh token using the dedicated refresh secret
+        const payload = await authService.verifyRefreshToken(refreshToken);
         if (!payload) {
             throw new UnauthorizedError('Invalid or expired refresh token');
-        }
-
-        // Validate that this is actually a refresh token, not an access token
-        if (payload.type !== 'refresh') {
-            throw new UnauthorizedError('Invalid token type: expected refresh token');
         }
 
         const { schema_name } = c.get('tenant')!;
@@ -349,7 +345,7 @@ authRoutes.post('/refresh', refreshRateLimit, async (c) => {
                 accessToken: newAccessToken,
             },
             meta: {
-                tokenExpiresIn: `${authService.getTokenExpirationHours()}h`,
+                tokenExpiresIn: `${authService.getTokenExpirationMinutes()}m`,
             },
         });
     } catch (error) {
@@ -593,7 +589,7 @@ authRoutes.post('/2fa/verify', otpRateLimit, validate(verify2faSchema), async (c
                 usedBackupCode: verifyResult.usedBackupCode,
             },
             meta: {
-                tokenExpiresIn: `${authService.getTokenExpirationHours()}h`,
+                tokenExpiresIn: `${authService.getTokenExpirationMinutes()}m`,
                 tenant: tenantCode,
             },
         });

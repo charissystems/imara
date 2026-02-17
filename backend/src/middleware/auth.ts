@@ -21,8 +21,10 @@ export async function authMiddleware(c: Context<Env>, next: Next) {
         '/health',
     ];
 
-    // Check if current path is public
-    if (publicPaths.includes(c.req.path)) {
+    // Check if current path is public (use startsWith for prefix matching
+    // so that paths like /health/readiness are also public)
+    const requestPath = c.req.path;
+    if (publicPaths.some(pp => requestPath === pp || requestPath.startsWith(pp + '/'))) {
         await next();
         return;
     }

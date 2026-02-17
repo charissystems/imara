@@ -20,8 +20,10 @@ interface RateLimitConfig {
 /**
  * In-memory fallback store when Redis is unavailable.
  * Entries auto-expire via a periodic cleanup interval.
+ * Capped at MAX_MEMORY_ENTRIES to prevent unbounded growth.
  */
 const memoryStore = new Map<string, { count: number; expiresAt: number }>();
+const MAX_MEMORY_ENTRIES = 10_000;
 
 // Cleanup expired entries every 60 seconds
 setInterval(() => {
@@ -69,6 +71,12 @@ async function incrementCounter(
             existing.count += 1;
             const ttl = Math.ceil((existing.expiresAt - now) / 1000);
             return { count: existing.count, ttl };
+        }
+
+        // Cap the store to prevent unbounded memory growth
+        if (memoryStore.size >= MAX_MEMORY_ENTRIES) {
+            const firstKey = memoryStore.keys().next().value;
+            if (firstKey) memoryStore.delete(firstKey);
         }
 
         const entry = { count: 1, expiresAt: now + windowSeconds * 1000 };

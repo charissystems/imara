@@ -1,6 +1,7 @@
 import { Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { Kysely, PostgresDialect, LogEvent } from 'kysely';
 import { Database, TenantDatabase } from '../database/types';
+import { appLogger } from '../middleware/logger';
 
 let _pool: Pool | null = null;
 
@@ -63,22 +64,22 @@ export class DatabaseManager {
 
         // LOGGING: Pool Errors (Network issues, idle timeouts)
         this.pool.on('error', (err) => {
-            console.error('❌ [PG POOL ERROR]: Unexpected error on idle client', err);
+            appLogger.error('PG POOL ERROR: Unexpected error on idle client', err);
         });
 
         // LOGGING: Client Notices (RAISE NOTICE, etc.)
         this.pool.on('connect', (client) => {
             client.on('notice', (msg) => {
-                console.log(`ℹ️  [PG NOTICE]: [${msg.code}] ${msg.severity} - ${msg.message}`);
+                appLogger.debug(`PG NOTICE: [${msg.code}] ${msg.severity} - ${msg.message}`);
             });
         });
 
         // Log pool info on connect
-        console.log(`📊 [DB POOL INITIALIZED]: max=${poolMax}, idle=${idleTimeout}ms, connection=${connectionTimeout}ms`);
+        appLogger.info(`DB POOL INITIALIZED: max=${poolMax}, idle=${idleTimeout}ms, connection=${connectionTimeout}ms`);
 
         const kyselyLogger = (event: LogEvent) => {
-            if (event.level === 'query') {
-                console.log(`🔍 [KYSELY QUERY]: ${event.query.sql.replace(/\s+/g, ' ').trim()}`);
+            if (event.level === 'query' && process.env.NODE_ENV !== 'production') {
+                appLogger.debug(`KYSELY QUERY: ${event.query.sql.replace(/\s+/g, ' ').trim()}`);
             }
         };
 
@@ -138,7 +139,7 @@ export class DatabaseManager {
                 await client.query(`SET search_path TO "${safeName}", public`);
             }
             const result = await client.query(queryText, parameters);
-            console.log(`📄 [RAW SQL]: ${result.rowCount} rows affected`);
+            appLogger.debug(`RAW SQL: ${result.rowCount} rows affected`);
             return result;
         } finally {
             // Always reset search_path before releasing to prevent cross-tenant leakage
@@ -169,6 +170,15 @@ export class DatabaseManager {
         callback: (client: PoolClient) => Promise<T>,
     ): Promise<T> {
         const safeName = schemaName.replace(/[^a-zA-Z0-9_]/g, '');
+
+        // Validate schema name matches expected tenant pattern
+        if (!/^tenant_[a-z0-9_]+$/.test(safeName)) {
+            throw new Error(
+                `Invalid tenant schema name "${safeName}". ` +
+                'Must match pattern tenant_<code> (lowercase alphanumeric + underscores).'
+            );
+        }
+
         const roleName = `${safeName}_role`;
         const client = await this.pool.connect();
 
@@ -178,7 +188,8 @@ export class DatabaseManager {
             // Pin search_path so unqualified table names resolve to this tenant
             await client.query(`SET search_path TO "${safeName}", public`);
             // Application-level variable readable by RLS policies via current_setting()
-            await client.query(`SET app.current_tenant = '${safeName}'`);
+            // Use set_config() with parameterized binding instead of string interpolation
+            await client.query(`SELECT set_config('app.current_tenant', $1, false)`, [safeName]);
 
             return await callback(client);
         } finally {
@@ -214,7 +225,7 @@ export class DatabaseManager {
             await this.pool.query('SELECT 1');
             return true;
         } catch (e) {
-            console.error('❌ [DB HEALTH CHECK] Failed', e);
+            appLogger.error('DB HEALTH CHECK Failed', e as Error);
             return false;
         }
     }
@@ -229,7 +240,7 @@ export class DatabaseManager {
         // Close pool
         if (this.pool) {
             await this.pool.end();
-            console.log('🔌 [DB POOL]: Disconnected');
+            appLogger.info('DB POOL: Disconnected');
         }
     }
 }

@@ -1,5 +1,6 @@
 // src/middleware/cors.ts
 import { cors as honoCors } from 'hono/cors';
+import { Context, Next } from 'hono';
 
 /**
  * CORS configuration based on environment
@@ -29,20 +30,24 @@ const getAllowedOrigins = (): string[] => {
 };
 
 /**
- * CORS middleware with dynamic origin validation
+ * CORS middleware with dynamic origin validation.
+ * Wraps Hono CORS to add `Vary: Origin` header, which is required when
+ * the `Access-Control-Allow-Origin` value changes per request — without it,
+ * shared caches (CDNs, proxies) may serve a cached response with the wrong
+ * origin, breaking cross-origin requests for other tenants.
  */
-export const corsMiddleware = honoCors({
+const _corsMiddleware = honoCors({
     origin: (origin, c) => {
         const allowedOrigins = getAllowedOrigins();
-        
+
         // Requests with no origin (mobile apps, curl, server-to-server).
         // When `credentials: true`, returning '*' is invalid for browsers.
         // Return `undefined` so Hono will skip setting a wildcard origin.
         if (!origin) return undefined;
-        
+
         // Check if origin is in allowed list
         if (allowedOrigins.includes(origin)) return origin;
-        
+
         // In development, allow strict localhost origins only
         if (process.env.NODE_ENV !== 'production') {
             if (/^https?:\/\/localhost(:\d+)?$/.test(origin)) return origin;
@@ -53,7 +58,7 @@ export const corsMiddleware = honoCors({
                 if (domainPattern.test(origin)) return origin;
             }
         }
-        
+
         // Check for tenant subdomain pattern in production
         if (process.env.NODE_ENV === 'production') {
             const baseDomain = process.env.BASE_DOMAIN || '';
@@ -64,7 +69,7 @@ export const corsMiddleware = honoCors({
                 }
             }
         }
-        
+
         return undefined;
     },
     credentials: true,
@@ -81,3 +86,9 @@ export const corsMiddleware = honoCors({
     ],
     maxAge: 86400, // 24 hours
 });
+
+export async function corsMiddleware(c: Context, next: Next) {
+    // Ensure caches key on Origin so different tenants don't get stale CORS headers
+    c.header('Vary', 'Origin');
+    return _corsMiddleware(c, next);
+}

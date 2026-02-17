@@ -381,9 +381,13 @@ app.get('/tenants/:id/stats', async (c) => {
         throw new NotFoundError('Tenant', id);
     }
 
-    // Get member count — sanitize schema name to prevent SQL injection
+    // Get member count — validate and sanitize schema name
     const poolInstance = getPool();
+    const VALID_SCHEMA = /^tenant_[a-z0-9_]+$/;
     const safeSchema = tenant.schema_name.replace(/[^a-zA-Z0-9_]/g, '');
+    if (!VALID_SCHEMA.test(safeSchema)) {
+        throw new AppError(500, 'Invalid tenant schema name', 'INVALID_SCHEMA');
+    }
     const memberCountResult = await poolInstance.query(
         `SELECT COUNT(*) as count FROM "${safeSchema}".members WHERE deleted_at IS NULL`
     );
@@ -415,6 +419,8 @@ app.get('/tenants/:id/stats', async (c) => {
  */
 app.post('/tenants/:id/suspend', async (c) => {
     const id = c.req.param('id');
+    const clientIp = c.req.header('x-forwarded-for')?.split(',')[0].trim()
+        || c.req.header('x-real-ip') || 'unknown';
 
     const tenant = await publicDb
         .updateTable('tenants')
@@ -432,6 +438,21 @@ app.post('/tenants/:id/suspend', async (c) => {
 
     clearTenantCache(tenant.subdomain);
 
+    // Audit log the suspension
+    try {
+        const pool = getPool();
+        await pool.query(
+            `INSERT INTO public.tenant_audit_log (schema_name, tenant_code, operation, details)
+             VALUES ($1, $2, $3, $4)`,
+            [
+                tenant.schema_name,
+                tenant.code,
+                'TENANT_SUSPENDED',
+                JSON.stringify({ tenantId: id, ip: clientIp, timestamp: new Date().toISOString() }),
+            ],
+        );
+    } catch { /* audit log failure should not block the response */ }
+
     return c.json({
         success: true,
         message: 'Tenant suspended successfully',
@@ -445,6 +466,8 @@ app.post('/tenants/:id/suspend', async (c) => {
  */
 app.post('/tenants/:id/reactivate', async (c) => {
     const id = c.req.param('id');
+    const clientIp = c.req.header('x-forwarded-for')?.split(',')[0].trim()
+        || c.req.header('x-real-ip') || 'unknown';
 
     const tenant = await publicDb
         .updateTable('tenants')
@@ -462,11 +485,30 @@ app.post('/tenants/:id/reactivate', async (c) => {
 
     clearTenantCache(tenant.subdomain);
 
+    // Audit log the reactivation
+    try {
+        const pool = getPool();
+        await pool.query(
+            `INSERT INTO public.tenant_audit_log (schema_name, tenant_code, operation, details)
+             VALUES ($1, $2, $3, $4)`,
+            [
+                tenant.schema_name,
+                tenant.code,
+                'TENANT_REACTIVATED',
+                JSON.stringify({ tenantId: id, ip: clientIp, timestamp: new Date().toISOString() }),
+            ],
+        );
+    } catch { /* audit log failure should not block the response */ }
+
     return c.json({
         success: true,
         message: 'Tenant reactivated successfully',
         data: tenant
     });
+});
+
+const extendSubscriptionSchema = z.object({
+    days: z.number().int().positive().max(365, 'Cannot extend more than 365 days at a time'),
 });
 
 /**
@@ -475,14 +517,22 @@ app.post('/tenants/:id/reactivate', async (c) => {
  */
 app.post('/tenants/:id/extend-subscription', async (c) => {
     const id = c.req.param('id');
-    const body = await c.req.json() as { days: number };
+    const body = await c.req.json();
 
-    if (!body.days || body.days <= 0) {
-        throw new ValidationError('days must be a positive number');
+    const result = extendSubscriptionSchema.safeParse(body);
+    if (!result.success) {
+        throw new ValidationError('Validation failed', {
+            errors: result.error.issues.map((e) => ({
+                field: e.path.join('.'),
+                message: e.message,
+            })),
+        });
     }
 
+    const { days } = result.data;
+
     const expiryDate = new Date();
-    expiryDate.setDate(expiryDate.getDate() + body.days);
+    expiryDate.setDate(expiryDate.getDate() + days);
 
     const tenant = await publicDb
         .updateTable('tenants')
@@ -506,7 +556,7 @@ app.post('/tenants/:id/extend-subscription', async (c) => {
         data: {
             tenantId: id,
             newExpiryDate: tenant.subscription_expires_at,
-            daysExtended: body.days
+            daysExtended: days
         }
     });
 });

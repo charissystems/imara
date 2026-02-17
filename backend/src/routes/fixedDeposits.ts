@@ -1087,7 +1087,7 @@ fixedDepositRoutes.get('/:depositId/interest-breakdown', enforcePermission('fixe
  * GET /fixed-deposits/members/:memberId
  * List all FDs for a specific member
  */
-fixedDepositRoutes.get('/members/:memberId', async (c) => {
+fixedDepositRoutes.get('/members/:memberId', enforcePermission('fixed_deposits', 'read'), async (c) => {
     try {
         const { memberId } = c.req.param();
         const db = c.get('db')!;
@@ -1128,7 +1128,7 @@ fixedDepositRoutes.get('/members/:memberId', async (c) => {
  * GET /fixed-deposits/members/:memberId/summary
  * Get summary of a member's FD portfolio
  */
-fixedDepositRoutes.get('/members/:memberId/summary', async (c) => {
+fixedDepositRoutes.get('/members/:memberId/summary', enforcePermission('fixed_deposits', 'read'), async (c) => {
     try {
         const { memberId } = c.req.param();
         const db = c.get('db')!;
@@ -1239,11 +1239,15 @@ fixedDepositRoutes.post('/:depositId/premature-withdrawal', validate(prematureWi
 // FD ROLLOVER
 // =============================================================================
 
+const rolloverSchema = z.object({
+    rollover_type: z.enum(['principal_only', 'principal_plus_interest']).default('principal_only'),
+});
+
 /**
  * POST /fixed-deposits/:depositId/rollover
  * Manually rollover a matured FD
  */
-fixedDepositRoutes.post('/:depositId/rollover', async (c) => {
+fixedDepositRoutes.post('/:depositId/rollover', validate(rolloverSchema), async (c) => {
     try {
         const { depositId } = c.req.param();
         const user = c.get('user');
@@ -1253,11 +1257,8 @@ fixedDepositRoutes.post('/:depositId/rollover', async (c) => {
             throw new UnauthorizedError('Insufficient permissions');
         }
 
-        const body = await c.req.json().catch(() => ({}));
-        const rolloverType: 'principal_only' | 'principal_plus_interest' =
-            body.rollover_type === 'principal_plus_interest'
-                ? 'principal_plus_interest'
-                : 'principal_only';
+        const data = getValidatedData<z.infer<typeof rolloverSchema>>(c);
+        const rolloverType = data.rollover_type;
 
         // Get FD
         const fd = await db

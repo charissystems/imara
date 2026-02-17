@@ -46,6 +46,20 @@ export async function initializeApp() {
         console.warn('⚠️  REFRESH_TOKEN_SECRET is less than 32 characters; should be longer for security');
     }
 
+    // Validate ADMIN_SECRET_KEY if set
+    const adminSecretKey = process.env.ADMIN_SECRET_KEY || '';
+    if (adminSecretKey && adminSecretKey.length < 32) {
+        console.warn('⚠️  ADMIN_SECRET_KEY is less than 32 characters; should be longer for security');
+    }
+    if (!adminSecretKey) {
+        console.warn('⚠️  ADMIN_SECRET_KEY is not set; super-admin endpoints will be inaccessible');
+    }
+
+    // Warn about CORS in production
+    if ((process.env.NODE_ENV || '') === 'production' && !process.env.ALLOWED_ORIGINS) {
+        console.warn('⚠️  ALLOWED_ORIGINS is not set in production; all browser CORS requests will be rejected');
+    }
+
     return {
         environment: process.env.NODE_ENV || 'development',
         port: parseInt(process.env.PORT || '3000', 10),

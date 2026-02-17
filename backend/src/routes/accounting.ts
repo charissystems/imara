@@ -682,6 +682,10 @@ accountingRoutes.post('/journals/:id/submit', async (c) => {
         const user = c.get('user');
         const db = getTenantDb(schema_name);
 
+        if (!user || !hasPermission(user.role || '', 'journal_entries', 'create')) {
+            throw new UnauthorizedError('Insufficient permissions to submit journal entries');
+        }
+
         const journal = await db
             .selectFrom('manual_journal_entries')
             .selectAll()

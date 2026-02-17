@@ -17,14 +17,28 @@ const BLACKLIST_PREFIX = 'token:blacklist:';
 /**
  * In-memory fallback blacklist for when Redis is unavailable.
  * Auto-cleans expired entries every 60 seconds.
+ * Capped at MAX_MEMORY_ENTRIES to prevent unbounded growth.
  */
 const memoryBlacklist = new Map<string, number>(); // hash → expiresAt (ms)
+const MAX_MEMORY_ENTRIES = 10_000;
 
 setInterval(() => {
     const now = Date.now();
     for (const [key, expiresAt] of memoryBlacklist) {
         if (expiresAt <= now) {
             memoryBlacklist.delete(key);
+        }
+    }
+}, 60_000).unref();
+
+/** In-memory "revoked-before" timestamps for user-level revocation when Redis is down */
+const memoryUserRevocations = new Map<string, { revokedBefore: number; expiresAt: number }>();
+
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of memoryUserRevocations) {
+        if (entry.expiresAt <= now) {
+            memoryUserRevocations.delete(key);
         }
     }
 }, 60_000).unref();
@@ -47,7 +61,12 @@ export async function blacklistToken(token: string, expUnix: number): Promise<vo
     const hash = await tokenHash(token);
     const ttlMs = Math.max(1000, (expUnix - Math.floor(Date.now() / 1000)) * 1000);
 
-    // Always write to in-memory fallback
+    // Always write to in-memory fallback (with cap to prevent unbounded growth)
+    if (memoryBlacklist.size >= MAX_MEMORY_ENTRIES) {
+        // Evict oldest entry
+        const firstKey = memoryBlacklist.keys().next().value;
+        if (firstKey) memoryBlacklist.delete(firstKey);
+    }
     memoryBlacklist.set(hash, Date.now() + ttlMs);
 
     if (!isRedisAvailable()) {
@@ -78,8 +97,10 @@ export async function isTokenBlacklisted(token: string): Promise<boolean> {
     }
 
     if (!isRedisAvailable()) {
-        // Redis down — rely on in-memory (which we already checked)
-        return false;
+        // Redis down — fail closed: reject tokens we can't verify against the
+        // authoritative blacklist. In-memory was already checked above.
+        appLogger.warn('Redis unavailable — failing closed on blacklist check');
+        return true;
     }
 
     try {
@@ -100,14 +121,21 @@ export async function isTokenBlacklisted(token: string): Promise<boolean> {
  * @param maxTtl   Maximum token lifetime in seconds (should be >= refresh token TTL)
  */
 export async function blacklistAllUserTokens(userId: string, maxTtl: number = 7 * 24 * 3600): Promise<void> {
+    const now = Math.floor(Date.now() / 1000);
+
+    // Always write to in-memory fallback so this instance rejects the user's tokens
+    memoryUserRevocations.set(userId, {
+        revokedBefore: now,
+        expiresAt: Date.now() + maxTtl * 1000,
+    });
+
     if (!isRedisAvailable()) {
-        appLogger.warn('Redis unavailable — user token revocation skipped');
+        appLogger.warn('Redis unavailable — user token revocation stored in memory only', { userId });
         return;
     }
 
     try {
         const redis = getCacheRedis();
-        const now = Math.floor(Date.now() / 1000);
         await redis.set(`${BLACKLIST_PREFIX}user:${userId}`, String(now), 'EX', maxTtl);
     } catch (err) {
         appLogger.error('Failed to blacklist user tokens', err as Error);

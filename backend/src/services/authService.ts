@@ -33,13 +33,14 @@ export interface TwoFactorConfig {
  */
 export class AuthService {
     private jwtSecret: string;
-    private tokenExpirationHours: number = 24;
+    private refreshTokenSecret: string;
+    private tokenExpirationMinutes: number = 30;
     private refreshTokenExpirationDays: number = 7;
     private otpExpirationMinutes: number = 10;
     private maxFailedAttempts: number = 5;
     private accountLockoutDurationMinutes: number = 15;
 
-    constructor(jwtSecret?: string) {
+    constructor(jwtSecret?: string, refreshTokenSecret?: string) {
         const secret = jwtSecret ?? process.env.JWT_SECRET;
         if (!secret) {
             throw new Error(
@@ -48,6 +49,15 @@ export class AuthService {
             );
         }
         this.jwtSecret = secret;
+
+        const refreshSecret = refreshTokenSecret ?? process.env.REFRESH_TOKEN_SECRET;
+        if (!refreshSecret) {
+            throw new Error(
+                'REFRESH_TOKEN_SECRET environment variable is required. ' +
+                'Set a strong secret (>=32 characters) before starting the server.'
+            );
+        }
+        this.refreshTokenSecret = refreshSecret;
     }
 
     // ──────────────────────────────────────────────────────────
@@ -114,7 +124,7 @@ export class AuthService {
         requiresTwoFactor?: boolean
     ): Promise<string> {
         const now = Math.floor(Date.now() / 1000);
-        const expirationSeconds = this.tokenExpirationHours * 60 * 60;
+        const expirationSeconds = this.tokenExpirationMinutes * 60;
 
         const payload: AuthJWTPayload = {
             staffId: staff.id,
@@ -133,6 +143,7 @@ export class AuthService {
 
     /**
      * Generate a JWT refresh token
+     * Uses a separate secret from access tokens for defense-in-depth
      */
     async generateRefreshToken(
         staff: Staff,
@@ -151,15 +162,28 @@ export class AuthService {
             exp: now + expirationSeconds,
         };
 
-        return await sign(payload, this.jwtSecret, 'HS256');
+        return await sign(payload, this.refreshTokenSecret, 'HS256');
     }
 
     /**
      * Verify and decode a JWT token
      */
-    async verifyToken(token: string): Promise<AuthJWTPayload | null> {
+    async verifyToken(token: string, expectedType: 'access' | 'refresh' | '2fa_pending' = 'access'): Promise<AuthJWTPayload | null> {
         try {
-            const payload = await verify(token, this.jwtSecret, 'HS256') as AuthJWTPayload;
+            const secret = expectedType === 'refresh'
+                ? this.refreshTokenSecret
+                : this.jwtSecret;
+            const payload = await verify(token, secret, 'HS256') as AuthJWTPayload;
+
+            // Ensure the token type matches expectations
+            if (payload.type && payload.type !== expectedType) {
+                appLogger.warn('Token type mismatch', {
+                    expected: expectedType,
+                    actual: payload.type,
+                });
+                return null;
+            }
+
             return payload;
         } catch (error) {
             appLogger.debug('Token verification failed', {
@@ -193,6 +217,13 @@ export class AuthService {
         };
 
         return await sign(payload, this.jwtSecret, 'HS256');
+    }
+
+    /**
+     * Verify a refresh token specifically (uses separate secret)
+     */
+    async verifyRefreshToken(token: string): Promise<AuthJWTPayload | null> {
+        return this.verifyToken(token, 'refresh');
     }
 
     /**
@@ -346,10 +377,17 @@ export class AuthService {
     // ──────────────────────────────────────────────────────────
 
     /**
-     * Get access token expiration time
+     * Get access token expiration time in minutes
+     */
+    getTokenExpirationMinutes(): number {
+        return this.tokenExpirationMinutes;
+    }
+
+    /**
+     * @deprecated Use getTokenExpirationMinutes() instead
      */
     getTokenExpirationHours(): number {
-        return this.tokenExpirationHours;
+        return this.tokenExpirationMinutes / 60;
     }
 
     /**

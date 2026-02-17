@@ -1,5 +1,6 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { nanoid } from 'nanoid';
 import { Env } from '../middleware/types';
 import { validate, getValidatedData, commonSchemas } from '../middleware/validation';
 import { ValidationError, NotFoundError, UnauthorizedError } from '../middleware/errorHandler';
@@ -82,7 +83,7 @@ const identityDocumentSchema = z.object({
  * List all members for the current tenant
  * Optional query params: ?status=active, ?search=term, ?page=1, ?limit=50
  */
-memberRoutes.get('/', async (c) => {
+memberRoutes.get('/', enforcePermission('members', 'read'), async (c) => {
     try {
         const { schema_name } = c.get('tenant')!;
         const status = c.req.query('status') as string | undefined;
@@ -125,18 +126,18 @@ memberRoutes.get('/', async (c) => {
  * GET /members/:id
  * Get a specific member by ID with full profile
  */
-memberRoutes.get('/:id', async (c) => {
+memberRoutes.get('/:id', enforcePermission('members', 'read'), async (c) => {
     try {
         const { id } = c.req.param();
         const { schema_name } = c.get('tenant')!;
-        
+
         const memberRepo = new MemberRepository(schema_name);
         const member = await memberRepo.findById(id);
-        
+
         if (!member) {
             throw new NotFoundError('Member', id);
         }
-        
+
         return c.json({
             success: true,
             data: member
@@ -150,7 +151,7 @@ memberRoutes.get('/:id', async (c) => {
  * GET /members/:id/accounts
  * Get all accounts (savings, loans, shares) for a member
  */
-memberRoutes.get('/:id/accounts', async (c) => {
+memberRoutes.get('/:id/accounts', enforcePermission('members', 'read'), async (c) => {
     try {
         const { id } = c.req.param();
         const { schema_name } = c.get('tenant')!;
@@ -202,7 +203,7 @@ memberRoutes.get('/:id/accounts', async (c) => {
  * GET /members/:id/statement
  * Generate a comprehensive member statement
  */
-memberRoutes.get('/:id/statement', async (c) => {
+memberRoutes.get('/:id/statement', enforcePermission('members', 'read'), async (c) => {
     try {
         const { id } = c.req.param();
         const { schema_name } = c.get('tenant')!;
@@ -304,7 +305,7 @@ memberRoutes.get('/:id/statement', async (c) => {
  * POST /members
  * Create a new member with optional auto-create savings account
  */
-memberRoutes.post('/', validate(createMemberSchema), async (c) => {
+memberRoutes.post('/', enforcePermission('members', 'create'), validate(createMemberSchema), async (c) => {
     try {
         const data = getValidatedData<z.infer<typeof createMemberSchema>>(c);
         const { schema_name } = c.get('tenant')!;
@@ -339,7 +340,7 @@ memberRoutes.post('/', validate(createMemberSchema), async (c) => {
         // Auto-create savings account
         if (auto_create_savings) {
             const accountRepo = new AccountRepository(schema_name);
-            const accountNumber = `SAV-${data.member_number}-${Date.now().toString(36).toUpperCase()}`;
+            const accountNumber = `SAV-${data.member_number}-${nanoid(12)}`;
 
             try {
                 savingsAccount = await accountRepo.create({
@@ -375,7 +376,7 @@ memberRoutes.post('/', validate(createMemberSchema), async (c) => {
  * PUT /members/:id
  * Update a member
  */
-memberRoutes.put('/:id', validate(updateMemberSchema), async (c) => {
+memberRoutes.put('/:id', enforcePermission('members', 'update'), validate(updateMemberSchema), async (c) => {
     try {
         const { id } = c.req.param();
         const data = getValidatedData<z.infer<typeof updateMemberSchema>>(c);
@@ -412,7 +413,7 @@ memberRoutes.put('/:id', validate(updateMemberSchema), async (c) => {
  * DELETE /members/:id
  * Soft delete a member
  */
-memberRoutes.delete('/:id', async (c) => {
+memberRoutes.delete('/:id', enforcePermission('members', 'delete'), async (c) => {
     try {
         const { id } = c.req.param();
         const { schema_name } = c.get('tenant')!;
@@ -477,7 +478,7 @@ memberRoutes.post('/bulk-import', validate(bulkImportSchema), async (c) => {
             const pm = parsedMembers[i];
             try {
                 // Check for duplicates
-                const memberNum = pm.memberNumber || `MEM-${Date.now().toString(36).toUpperCase()}-${i}`;
+                const memberNum = pm.memberNumber || `MEM-${nanoid(10)}-${i}`;
                 const existing = await memberRepo.findByMemberNumber(memberNum);
                 if (existing) {
                     results.skipped++;
@@ -509,7 +510,7 @@ memberRoutes.post('/bulk-import', validate(bulkImportSchema), async (c) => {
                 if (data.auto_create_savings) {
                     try {
                         await accountRepo.create({
-                            account_number: `SAV-${memberNum}-${Date.now().toString(36).toUpperCase()}`,
+                            account_number: `SAV-${memberNum}-${nanoid(12)}`,
                             member_id: newMember.id,
                             product_id: 'default',
                             principal_balance: 0,
@@ -645,7 +646,7 @@ memberRoutes.post('/:id/documents', validate(identityDocumentSchema), async (c) 
  * GET /members/:id/documents
  * List identity documents for a member
  */
-memberRoutes.get('/:id/documents', async (c) => {
+memberRoutes.get('/:id/documents', enforcePermission('members', 'read'), async (c) => {
     try {
         const { id } = c.req.param();
         const { schema_name } = c.get('tenant')!;
