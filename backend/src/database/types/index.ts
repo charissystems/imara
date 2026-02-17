@@ -13,6 +13,8 @@ export type {
     TenantMigrationsTable,
     TenantAuditLogTable,
     CurrenciesTable,
+    TenantBackupsTable,
+    TenantRetentionPoliciesTable,
     RolesTable as PublicRolesTable,
     PermissionsTable as PublicPermissionsTable,
     RolePermissionsTable as PublicRolePermissionsTable,

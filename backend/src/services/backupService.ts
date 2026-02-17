@@ -43,10 +43,10 @@ export class TenantBackupService {
             const retentionDays = options.retentionDays || 30;
 
             // Call PostgreSQL backup function
-            const result = await publicDb
+            const result = await (publicDb as any)
                 .selectFrom('backup_tenant_schema')
                 .selectAll()
-                .execute() as any; // Cast due to function return type complexity
+                .execute(); // Cast due to function return type complexity
 
             if (!result || result.length === 0) {
                 throw new Error('Backup function returned no results');
@@ -68,10 +68,11 @@ export class TenantBackupService {
             appLogger.info('Backup created successfully', backupStatus);
             return backupStatus;
         } catch (error) {
-            appLogger.error('Failed to create backup', {
-                tenantId: tenant.id,
-                error: error instanceof Error ? error.message : 'Unknown error',
-            });
+            appLogger.error(
+                'Failed to create backup',
+                error instanceof Error ? error : new Error('Unknown error'),
+                { tenantId: tenant.id }
+            );
 
             throw error;
         }
@@ -86,17 +87,17 @@ export class TenantBackupService {
                 .selectFrom('tenant_backups')
                 .selectAll()
                 .where('tenant_id', '=', tenantId)
-                .where('deleted_at', 'is', null)
                 .orderBy('created_at', 'desc')
                 .limit(limit)
                 .execute();
 
             return backups;
         } catch (error) {
-            appLogger.error('Failed to list backups', {
-                tenantId,
-                error: error instanceof Error ? error.message : 'Unknown error',
-            });
+            appLogger.error(
+                'Failed to list backups',
+                error instanceof Error ? error : new Error('Unknown error'),
+                { tenantId }
+            );
 
             throw error;
         }
@@ -119,10 +120,11 @@ export class TenantBackupService {
 
             return backup;
         } catch (error) {
-            appLogger.error('Failed to get backup', {
-                backupId,
-                error: error instanceof Error ? error.message : 'Unknown error',
-            });
+            appLogger.error(
+                'Failed to get backup',
+                error instanceof Error ? error : new Error('Unknown error'),
+                { backupId }
+            );
 
             throw error;
         }
@@ -169,10 +171,11 @@ export class TenantBackupService {
             appLogger.info('Backup verified successfully', { backupId });
             return true;
         } catch (error) {
-            appLogger.error('Failed to verify backup', {
-                backupId,
-                error: error instanceof Error ? error.message : 'Unknown error',
-            });
+            appLogger.error(
+                'Failed to verify backup',
+                error instanceof Error ? error : new Error('Unknown error'),
+                { backupId }
+            );
 
             return false;
         }
@@ -218,11 +221,11 @@ export class TenantBackupService {
                 message: `Restore completed. New schema: ${restoreSchema}`,
             };
         } catch (error) {
-            appLogger.error('Failed to restore backup', {
-                backupId,
-                tenantId,
-                error: error instanceof Error ? error.message : 'Unknown error',
-            });
+            appLogger.error(
+                'Failed to restore backup',
+                error instanceof Error ? error : new Error('Unknown error'),
+                { backupId, tenantId }
+            );
 
             throw error;
         }
@@ -246,10 +249,11 @@ export class TenantBackupService {
 
             appLogger.info('Backup marked as expired', { backupId });
         } catch (error) {
-            appLogger.error('Failed to delete backup', {
-                backupId,
-                error: error instanceof Error ? error.message : 'Unknown error',
-            });
+            appLogger.error(
+                'Failed to delete backup',
+                error instanceof Error ? error : new Error('Unknown error'),
+                { backupId }
+            );
 
             throw error;
         }
@@ -275,10 +279,11 @@ export class TenantBackupService {
                 auto_purge_enabled: true,
             };
         } catch (error) {
-            appLogger.error('Failed to get retention policy', {
-                tenantId,
-                error: error instanceof Error ? error.message : 'Unknown error',
-            });
+            appLogger.error(
+                'Failed to get retention policy',
+                error instanceof Error ? error : new Error('Unknown error'),
+                { tenantId }
+            );
 
             throw error;
         }
@@ -315,10 +320,11 @@ export class TenantBackupService {
 
             appLogger.info('Retention policy updated', { tenantId });
         } catch (error) {
-            appLogger.error('Failed to update retention policy', {
-                tenantId,
-                error: error instanceof Error ? error.message : 'Unknown error',
-            });
+            appLogger.error(
+                'Failed to update retention policy',
+                error instanceof Error ? error : new Error('Unknown error'),
+                { tenantId }
+            );
 
             throw error;
         }

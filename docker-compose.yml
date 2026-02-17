@@ -1,0 +1,116 @@
+# ── Imara SACCO Platform – Docker Compose ────────────────────────────
+# Usage:
+#   cp .env.example .env          # fill in secrets
+#   docker compose up -d          # start all services
+#   docker compose logs -f api    # follow API logs
+#   docker compose down -v        # tear down (including volumes)
+
+services:
+  # ── PostgreSQL ──────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: imara-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-imara}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      POSTGRES_DB: ${DB_NAME:-imara}
+    ports:
+      - "${DB_PORT_PUBLISHED:-5432}:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-imara} -d ${DB_NAME:-imara}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - imara-net
+
+  # ── Redis ───────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: imara-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:-changeme}
+      --maxmemory 128mb
+      --maxmemory-policy noeviction
+      --appendonly yes
+    ports:
+      - "${REDIS_PORT_PUBLISHED:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-changeme}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - imara-net
+
+  # ── Node.js API ─────────────────────────────────────────────────────
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: imara-api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: ${NODE_ENV:-production}
+      PORT: 3000
+
+      # Database
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USER: ${DB_USER:-imara}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      DB_NAME: ${DB_NAME:-imara}
+      DB_POOL_MAX: ${DB_POOL_MAX:-20}
+
+      # Redis
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-changeme}
+      REDIS_DB: ${REDIS_DB:-0}
+
+      # Auth
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      REFRESH_TOKEN_SECRET: ${REFRESH_TOKEN_SECRET:?REFRESH_TOKEN_SECRET is required}
+
+      # Jobs
+      ENABLE_JOB_SCHEDULER: ${ENABLE_JOB_SCHEDULER:-true}
+
+      # App
+      ADMIN_SECRET_KEY: ${ADMIN_SECRET_KEY:-}
+      BASE_DOMAIN: ${BASE_DOMAIN:-}
+      FRONTEND_URL: ${FRONTEND_URL:-}
+
+      # Email (optional)
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
+    ports:
+      - "${API_PORT_PUBLISHED:-3000}:3000"
+    networks:
+      - imara-net
+
+volumes:
+  pg_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  imara-net:
+    driver: bridge

@@ -97,7 +97,7 @@ export async function logger(c: Context<Env>, next: Next) {
 export const appLogger = {
     info: (message: string, meta?: Record<string, any>) => {
         console.log(
-            `${colors.blue}ℹ${colors.reset}`,
+            `${colors.blue}🔵${colors.reset}`,
             `${colors.bright}[INFO]${colors.reset}`,
             message,
             meta ? JSON.stringify(meta, null, 2) : ''
@@ -106,7 +106,7 @@ export const appLogger = {
     
     warn: (message: string, meta?: Record<string, any>) => {
         console.warn(
-            `${colors.yellow}⚠${colors.reset}`,
+            `${colors.yellow}🟡${colors.reset}`,
             `${colors.bright}[WARN]${colors.reset}`,
             message,
             meta ? JSON.stringify(meta, null, 2) : ''
@@ -115,7 +115,7 @@ export const appLogger = {
     
     error: (message: string, error?: Error, meta?: Record<string, any>) => {
         console.error(
-            `${colors.red}✖${colors.reset}`,
+            `${colors.red}🔴${colors.reset}`,
             `${colors.bright}[ERROR]${colors.reset}`,
             message,
             error ? `\n${error.stack}` : '',
@@ -125,7 +125,7 @@ export const appLogger = {
     
     success: (message: string, meta?: Record<string, any>) => {
         console.log(
-            `${colors.green}✓${colors.reset}`,
+            `${colors.green}🟢${colors.reset}`,
             `${colors.bright}[SUCCESS]${colors.reset}`,
             message,
             meta ? JSON.stringify(meta, null, 2) : ''
@@ -135,7 +135,7 @@ export const appLogger = {
     debug: (message: string, meta?: Record<string, any>) => {
         if (process.env.NODE_ENV === 'development') {
             console.log(
-                `${colors.magenta}[DEBUG]${colors.reset}`,
+                `${colors.magenta}🟣${colors.reset}`,
                 message,
                 meta ? JSON.stringify(meta, null, 2) : ''
             );

@@ -1,7 +1,7 @@
 import { Insertable, Selectable, Updateable } from 'kysely';
 
 // Public/Registry
-import { TenantsTable, TenantMigrationsTable, TenantAuditLogTable, CurrenciesTable } from './public';
+import { TenantsTable, TenantMigrationsTable, TenantAuditLogTable, CurrenciesTable, TenantBackupsTable, TenantRetentionPoliciesTable } from './public';
 
 // Auth
 import {
@@ -134,6 +134,12 @@ export type NewTenant = Insertable<TenantsTable>;
 export type TenantAuditLog = Selectable<TenantAuditLogTable>;
 export type Currency = Selectable<CurrenciesTable>;
 export type NewCurrency = Insertable<CurrenciesTable>;
+export type TenantBackup = Selectable<TenantBackupsTable>;
+export type NewTenantBackup = Insertable<TenantBackupsTable>;
+export type TenantBackupUpdate = Updateable<TenantBackupsTable>;
+export type TenantRetentionPolicy = Selectable<TenantRetentionPoliciesTable>;
+export type NewTenantRetentionPolicy = Insertable<TenantRetentionPoliciesTable>;
+export type TenantRetentionPolicyUpdate = Updateable<TenantRetentionPoliciesTable>;
 
 // Authentication & Authorization
 export type Permission = Selectable<PermissionsTable>;

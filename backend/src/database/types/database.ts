@@ -4,6 +4,8 @@ import {
     TenantMigrationsTable,
     TenantAuditLogTable,
     CurrenciesTable,
+    TenantBackupsTable,
+    TenantRetentionPoliciesTable,
     PermissionsTable as PublicPermissionsTable,
     RolesTable as PublicRolesTable,
     RolePermissionsTable as PublicRolePermissionsTable,
@@ -139,6 +141,8 @@ export interface PublicDatabase {
     tenant_migrations: TenantMigrationsTable;
     tenant_audit_log: TenantAuditLogTable;
     currencies: CurrenciesTable;
+    tenant_backups: TenantBackupsTable;
+    tenant_retention_policies: TenantRetentionPoliciesTable;
 }
 
 export interface TenantDatabase {

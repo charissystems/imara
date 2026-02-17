@@ -77,6 +77,41 @@ export interface CurrenciesTable {
     deleted_at: NullableDateColumn;
 }
 
+export interface TenantBackupsTable {
+    id: Generated<string>;
+    tenant_id: string;
+    backup_number: string;
+    backup_type: ColumnType<string, string | undefined>;
+    backup_location: string;
+    backup_size_bytes: number | null;
+    status: ColumnType<string, string | undefined>;
+    verification_timestamp: DateColumn | null;
+    verification_result: string | null;
+    created_at: DateColumn;
+    expires_at: DateColumn | null;
+    retention_days: ColumnType<number, number | undefined>;
+    can_restore: ColumnType<boolean, boolean | undefined>;
+    last_restored_at: DateColumn | null;
+    restored_to_tenant_id: string | null;
+    backed_by: string | null;
+    backup_reason: string | null;
+    checksum: string | null;
+}
+
+export interface TenantRetentionPoliciesTable {
+    id: Generated<string>;
+    tenant_id: string;
+    audit_log_retention_days: ColumnType<number, number | undefined>;
+    activity_log_retention_days: ColumnType<number, number | undefined>;
+    transaction_retention_years: ColumnType<number, number | undefined>;
+    deleted_member_retention_days: ColumnType<number, number | undefined>;
+    auto_purge_enabled: ColumnType<boolean, boolean | undefined>;
+    next_purge_date: DateColumn | null;
+    last_purge_run_at: DateColumn | null;
+    created_at: DateColumn;
+    updated_at: DateColumn;
+}
+
 /*
  * IDENTITY & ACCESS MANAGEMENT (IAM)
  * Definitions for Roles, Permissions, and their relationships to control system access

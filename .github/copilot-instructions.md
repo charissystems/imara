@@ -1,3 +1,79 @@
+# Project branching & workflow strategy
+applyTo: "**"
+
+## Branch Naming Convention
+
+All branches must follow the pattern: `<type>/<short-slug>`
+
+| Type | Base Branch | Merges To | Use Case |
+|---|---|---|---|
+| `feat/` | `development` | `development` | New feature or capability |
+| `fix/` | `development` | `development` | Bug fix (non-urgent) |
+| `hotfix/` | `main` | `main` + `development` | Critical production fix (urgent) |
+| `refactor/` | `development` | `development` | Code restructuring, no behavior change |
+| `chore/` | `development` | `development` | Tooling, config, dependencies |
+| `docs/` | `development` | `development` | Documentation only |
+| `test/` | `development` | `development` | Adding or improving tests |
+
+## Examples
+
+```
+feat/mtn-momo-integration
+feat/variable-interest-rates
+fix/duplicate-repayment-posting
+hotfix/loan-accrual-overflow
+refactor/centralize-interest-logic
+chore/add-docker-healthcheck
+```
+
+**Rules:**
+- Lowercase only, words separated by hyphens
+- No personal names or WIP branches on shared branches
+- Delete branches after merge
+- Always base from up-to-date remote branch
+
+## Development Workflow
+
+1. **Start new work:**
+   ```bash
+   git checkout development && git pull origin development
+   git checkout -b feat/my-feature
+   ```
+
+2. **Before pushing:**
+   - Run `pnpm tsc --noEmit` (no type errors)
+   - Run `pnpm test` (all tests pass)
+   - Keep commits small and focused (see commit guidelines below)
+
+3. **Open a Pull Request:**
+   - Target: `development` (or `main` for hotfixes)
+   - Fill out PR template completely
+   - Ensure CI passes (typecheck, unit tests, integration tests)
+   - Request review from at least one team member
+
+4. **After merge:**
+   ```bash
+   git checkout development && git pull origin development
+   git branch -d feat/my-feature
+   git push origin --delete feat/my-feature
+   ```
+
+5. **Hotfix workflow** (critical production fixes):
+   ```bash
+   git checkout main && git pull origin main
+   git checkout -b hotfix/critical-bug
+   # Fix, commit, push, open PR to main
+   # After merge to main, merge main → development
+   ```
+
+## CI/CD Gating
+
+- All PRs require status checks to pass: typecheck, unit tests, integration tests
+- Production deploys require manual approval in GitHub Environment
+- Coverage threshold: 70% lines/functions, 60% branches
+
+---
+
 # Project general coding standards
 applyTo: "**"
 
@@ -50,6 +126,20 @@ applyTo: "docs/**/*.md"
 - Use bullet points for lists.
 - Include links to related resources.
 - Use code blocks for code snippets.
+
+# Pre-commit checklist
+applyTo: "**"
+
+Before committing code, verify:
+
+- [ ] **TypeScript compiles:** `pnpm tsc --noEmit` (no errors)
+- [ ] **Tests pass:** `pnpm test` (unit + integration)
+- [ ] **Coverage thresholds met:** `pnpm test:coverage` (70% lines/functions, 60% branches)
+- [ ] **No secrets committed:** `.env`, API keys, credentials excluded
+- [ ] **Branch is up to date:** `git fetch && git rebase origin/<base-branch>`
+- [ ] **Commits follow conventions:** See commit message guidelines below
+
+Reference: [CONTRIBUTING.md](../../CONTRIBUTING.md) for full development workflow, PR process, and hotfix procedures.
 
 # Project commit message guidelines  
 applyTo: "**/*"

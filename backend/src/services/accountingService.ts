@@ -159,14 +159,16 @@ export class AccountingService {
         }
 
         // Validate that account type and normal balance match conventional accounting
-        const conventionalBalance = this.getConventionalBalance(account.accountType);
-        if (account.normalBalance && account.normalBalance !== conventionalBalance) {
-            appLogger.warn('Account normal balance differs from convention', {
-                accountType: account.accountType,
-                normalBalance: account.normalBalance,
-                convention: conventionalBalance,
-            });
-            // Not an error, just a warning - allow flexibility
+        if (account.accountType) {
+            const conventionalBalance = this.getConventionalBalance(account.accountType);
+            if (account.normalBalance && account.normalBalance !== conventionalBalance) {
+                appLogger.warn('Account normal balance differs from convention', {
+                    accountType: account.accountType,
+                    normalBalance: account.normalBalance,
+                    convention: conventionalBalance,
+                });
+                // Not an error, just a warning - allow flexibility
+            }
         }
 
         return { valid: errors.length === 0, errors };
