@@ -1,5 +1,5 @@
 # ── Stage 1: Install dependencies ─────────────────────────────────────
-FROM node:22-alpine AS deps
+FROM node:25-alpine AS deps
 
 RUN corepack enable && corepack prepare pnpm@10.26.2 --activate
 
@@ -16,7 +16,7 @@ RUN pnpm install --frozen-lockfile --prod=false
 #   esbuild resolves all relative imports at bundle time so no extensions
 #   are needed at runtime, while --packages=external keeps node_modules
 #   out of the bundle (loaded from disk as usual).
-FROM node:22-alpine AS build
+FROM node:25-alpine AS build
 
 RUN corepack enable && corepack prepare pnpm@10.26.2 --activate
 
@@ -46,7 +46,7 @@ RUN esbuild src/server.ts \
     --outfile=dist/server.js
 
 # ── Stage 3: Production image ────────────────────────────────────────
-FROM node:22-alpine AS production
+FROM node:25-alpine AS production
 
 RUN corepack enable && corepack prepare pnpm@10.26.2 --activate
 
