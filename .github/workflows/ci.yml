@@ -50,7 +50,7 @@ jobs:
   unit-tests:
     name: Unit Tests & Coverage
     runs-on: ubuntu-latest
-    needs: [typecheck, security-audit]
+    needs: typecheck
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup-backend
@@ -83,7 +83,7 @@ jobs:
   integration-tests:
     name: Integration Tests
     runs-on: ubuntu-latest
-    needs: [typecheck, security-audit]
+    needs: typecheck
 
     services:
       postgres:
