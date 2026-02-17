@@ -124,7 +124,6 @@ function getClientId(c: Context): string {
     }
 
     // No trusted proxy — fall back to a stable request fingerprint.
-    // Hono doesn't expose remoteAddress on Node; combine what we have.
     return c.req.header('x-real-ip') || 'unknown';
 }
 

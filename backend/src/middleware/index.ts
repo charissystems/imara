@@ -41,3 +41,4 @@ export { validate, getValidatedData, commonSchemas } from './validation';
 export { cacheInvalidation } from './cacheInvalidation';
 export { rateLimit, loginRateLimit, registerRateLimit, passwordResetRateLimit, otpRateLimit, apiRateLimit } from './rateLimiter';
 export { securityHeadersMiddleware } from './securityHeaders';
+export { bodyLimitMiddleware } from './bodyLimit';

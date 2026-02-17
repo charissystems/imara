@@ -5,6 +5,20 @@ import { getPool } from '../config/database';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Validates tenant schema name to prevent SQL injection.
+ * Must match pattern: tenant_<lowercase_alphanumeric_underscores>
+ */
+function validateSchemaName(schemaName: string): void {
+    const VALID_SCHEMA_PATTERN = /^tenant_[a-z0-9_]+$/;
+    if (!VALID_SCHEMA_PATTERN.test(schemaName)) {
+        throw new Error(
+            `Invalid schema name "${schemaName}". ` +
+            'Must match pattern tenant_<code> (lowercase alphanumeric + underscores).'
+        );
+    }
+}
+
 export class MigrationRunner {
     private publicMigrationsPath = path.join(__dirname, '../database/migrations-public');
     private tenantMigrationsPath = path.join(__dirname, '../database/migrations');
@@ -54,6 +68,9 @@ export class MigrationRunner {
      * @param tenantId - The UUID of the tenant from the registry
      */
     async runTenantMigrations(schemaName: string, tenantId: string) {
+        // SECURITY: Validate schema name to prevent SQL injection
+        validateSchemaName(schemaName);
+        
         console.log(`🏢 Running Tenant Migrations for schema: ${schemaName}`);
         const files = await this.getSortedSqlFiles(this.tenantMigrationsPath);
 

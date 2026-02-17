@@ -5,6 +5,7 @@ import {
     tenantResolver, schemaContext, corsMiddleware, 
     authMiddleware, requestContext, auditMiddleware,
     cacheInvalidation, tenantIsolationCheck,
+    bodyLimitMiddleware,
 } from './middleware';
 import type { Env } from './middleware';
 import { securityHeadersMiddleware } from './middleware/securityHeaders';
@@ -28,6 +29,7 @@ const app = createApp();
 app.onError(errorHandler);
 app.use('*', logger);
 app.use('*', requestContext);
+app.use('*', bodyLimitMiddleware({ maxSize: 10 * 1024 * 1024 })); // 10MB limit
 app.use('*', securityHeadersMiddleware as MiddlewareHandler<Env>);
 
 if (process.env.ENABLE_CORS === 'true') {
