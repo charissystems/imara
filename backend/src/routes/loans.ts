@@ -13,6 +13,7 @@ import { AccountRepository } from '../repositories/accountRepository';
 import { MemberRepository } from '../repositories/memberRepository';
 import { getTenantDb } from '../config/database';
 import { hasPermission, enforcePermission } from '../middleware/rbac';
+import { rateLimit } from '../middleware/rateLimiter';
 
 export const loanRoutes = new Hono<Env>();
 
@@ -589,7 +590,7 @@ loanRoutes.get('/:loanId', async (c) => {
  * Process a loan repayment with Decimal-precision auto-allocation.
  * Allocates: penalties → interest → principal.
  */
-loanRoutes.post('/repayment', validate(processRepaymentSchema), async (c) => {
+loanRoutes.post('/repayment', rateLimit({ maxRequests: 20, windowSeconds: 60, keyPrefix: 'rl:loan-repayment' }), validate(processRepaymentSchema), async (c) => {
     try {
         const data = getValidatedData<z.infer<typeof processRepaymentSchema>>(c);
         const { schema_name } = c.get('tenant')!;
@@ -1945,33 +1946,55 @@ loanRoutes.post('/:loanId/guarantor-recovery', enforcePermission('loans', 'updat
             throw new ValidationError('No single savings account has sufficient balance for this recovery.');
         }
 
-        // Create withdrawal from guarantor's savings
-        await db
-            .updateTable('savings_accounts')
-            .set({
-                principal_balance: String(Number(sourceAccount.principal_balance) - data.amount) as any,
-                updated_at: now as any,
-            } as any)
-            .where('id', '=', sourceAccount.id)
-            .execute();
+        // Execute guarantor recovery atomically in a database transaction
+        const result = await db.transaction().execute(async (trx) => {
+            // Create withdrawal from guarantor's savings
+            await trx
+                .updateTable('savings_accounts' as any)
+                .set({
+                    principal_balance: String(Number(sourceAccount.principal_balance) - data.amount) as any,
+                    updated_at: now as any,
+                } as any)
+                .where('id', '=', sourceAccount.id)
+                .execute();
 
-        // Record the savings withdrawal
-        await db
-            .insertInto('withdrawals')
-            .values({
-                savings_account_id: sourceAccount.id,
-                member_id: guarantor.guarantor_id as string,
-                amount: String(data.amount) as any,
-                withdrawal_number: recoveryRef,
-                withdrawal_date: now as any,
-                payout_method: 'internal' as any,
-                description: `Guarantor recovery for loan ${loan.loan_number}: ${data.reason}`,
-                requested_by: user!.id,
-                status: 'completed' as any,
-            } as any)
-            .execute();
+            // Record the savings withdrawal
+            await trx
+                .insertInto('withdrawals')
+                .values({
+                    savings_account_id: sourceAccount.id,
+                    member_id: guarantor.guarantor_id as string,
+                    amount: String(data.amount) as any,
+                    withdrawal_number: recoveryRef,
+                    withdrawal_date: now as any,
+                    payout_method: 'internal' as any,
+                    description: `Guarantor recovery for loan ${loan.loan_number}: ${data.reason}`,
+                    requested_by: user!.id,
+                    status: 'completed' as any,
+                } as any)
+                .execute();
 
-        // Process loan repayment
+            // Record recovery action
+            await trx
+                .insertInto('loan_recovery_actions')
+                .values({
+                    loan_account_id: loanId,
+                    action_type: 'guarantor_recovery' as any,
+                    action_date: now as any,
+                    description: `Recovered ${data.amount} from guarantor savings. Reason: ${data.reason}`,
+                    amount_recovered: String(data.amount) as any,
+                    status: 'completed' as any,
+                    created_by: user!.id,
+                } as any)
+                .execute();
+
+            return {
+                sourceAccountId: sourceAccount.id,
+                remainingBalance: Number(sourceAccount.principal_balance) - data.amount,
+            };
+        });
+
+        // Process loan repayment (uses its own transaction internally)
         const repaymentService = new RepaymentService(db);
         const repaymentResult = await repaymentService.processRepayment({
             loanAccountId: loanId,
@@ -1980,20 +2003,6 @@ loanRoutes.post('/:loanId/guarantor-recovery', enforcePermission('loans', 'updat
             paymentReference: recoveryRef,
             recordedBy: user!.id,
         });
-
-        // Record recovery action
-        await db
-            .insertInto('loan_recovery_actions')
-            .values({
-                loan_account_id: loanId,
-                action_type: 'guarantor_recovery' as any,
-                action_date: now as any,
-                description: `Recovered ${data.amount} from guarantor savings. Reason: ${data.reason}`,
-                amount_recovered: String(data.amount) as any,
-                status: 'completed' as any,
-                created_by: user!.id,
-            } as any)
-            .execute();
 
         return c.json({
             success: true,

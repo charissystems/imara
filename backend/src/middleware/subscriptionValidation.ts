@@ -167,12 +167,19 @@ export async function validateUserLimit(c: Context<Env>, next: Next) {
             tenant_id: tenant.id,
         });
     } catch (error) {
+        // Rethrow ForbiddenError (from limit check) as-is
+        if (error instanceof ForbiddenError) {
+            throw error;
+        }
         appLogger.error('Failed to validate user limit', undefined, {
             tenant_id: tenant.id,
             error: error instanceof Error ? error.message : 'Unknown error',
         });
 
-        // Don't block on validation failure, just log
+        // Fail closed — deny request when validation cannot be performed
+        throw new ForbiddenError(
+            'Unable to validate subscription limits. Please try again later.'
+        );
     }
 
     await next();
@@ -233,10 +240,19 @@ export async function validateMemberLimit(c: Context<Env>, next: Next) {
             });
         }
     } catch (error) {
+        // Rethrow ForbiddenError (from limit check) as-is
+        if (error instanceof ForbiddenError) {
+            throw error;
+        }
         appLogger.error('Failed to validate member limit', undefined, {
             tenant_id: tenant.id,
             error: error instanceof Error ? error.message : 'Unknown error',
         });
+
+        // Fail closed — deny request when validation cannot be performed
+        throw new ForbiddenError(
+            'Unable to validate subscription limits. Please try again later.'
+        );
     }
 
     await next();

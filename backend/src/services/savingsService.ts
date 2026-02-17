@@ -19,6 +19,7 @@
  * - SAV-016: Accrue interest daily
  */
 
+import { nanoid } from 'nanoid';
 import { appLogger } from '../middleware/logger';
 
 /**
@@ -135,8 +136,7 @@ export class SavingsService {
      */
     generateTransactionReference(type: string = 'DEPOSIT'): string {
         const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-        const random = Math.random().toString(36).substring(2, 7).toUpperCase();
-        return `${type}-${date}-${random}`;
+        return `${type}-${date}-${nanoid(12)}`;
     }
 
     /**

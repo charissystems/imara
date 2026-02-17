@@ -8,17 +8,48 @@
 -- Add tenant_id to key tables for super-admin visibility
 -- ─────────────────────────────────────────────────────────────
 
--- Add tenant_id to audit logs (allows super-admin cross-tenant auditing)
-ALTER TABLE template.audit_log ADD COLUMN IF NOT EXISTS tenant_id uuid;
-CREATE INDEX IF NOT EXISTS audit_log_tenant_idx ON template.audit_log(tenant_id, timestamp DESC);
+-- Add tenant_id to template tables for super-admin cross-tenant auditing.
+-- These tables are only created when the first tenant is provisioned
+-- (via tenant migrations), so we guard each statement with an existence
+-- check to keep this migration idempotent on a fresh database.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'template' AND table_name = 'audit_log'
+    ) THEN
+        ALTER TABLE template.audit_log ADD COLUMN IF NOT EXISTS tenant_id uuid;
+        CREATE INDEX IF NOT EXISTS audit_log_tenant_idx
+            ON template.audit_log(tenant_id, timestamp DESC);
+    END IF;
+END;
+$$;
 
--- Add tenant_id to activity logs
-ALTER TABLE template.activity_log ADD COLUMN IF NOT EXISTS tenant_id uuid;
-CREATE INDEX IF NOT EXISTS activity_log_tenant_idx ON template.activity_log(tenant_id, timestamp DESC);
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'template' AND table_name = 'activity_log'
+    ) THEN
+        ALTER TABLE template.activity_log ADD COLUMN IF NOT EXISTS tenant_id uuid;
+        CREATE INDEX IF NOT EXISTS activity_log_tenant_idx
+            ON template.activity_log(tenant_id, timestamp DESC);
+    END IF;
+END;
+$$;
 
--- Add tenant_id to data export logs
-ALTER TABLE template.data_export_log ADD COLUMN IF NOT EXISTS tenant_id uuid;
-CREATE INDEX IF NOT EXISTS data_export_tenant_idx ON template.data_export_log(tenant_id);
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = 'template' AND table_name = 'data_export_log'
+    ) THEN
+        ALTER TABLE template.data_export_log ADD COLUMN IF NOT EXISTS tenant_id uuid;
+        CREATE INDEX IF NOT EXISTS data_export_tenant_idx
+            ON template.data_export_log(tenant_id);
+    END IF;
+END;
+$$;
 
 -- ─────────────────────────────────────────────────────────────
 -- 2. ENHANCED TENANT MIGRATION TRACKING

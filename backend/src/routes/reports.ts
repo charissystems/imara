@@ -27,8 +27,12 @@ import {
     NPL_REPORT_COLUMNS,
     DAILY_TRANSACTIONS_COLUMNS,
 } from '../services/exportService';
+import { enforcePermission } from '../middleware/rbac';
 
 export const reportRoutes = new Hono<Env>();
+
+// Enforce read permission on all report routes
+reportRoutes.use('*', enforcePermission('reports', 'read'));
 
 const exportService = new ExportService();
 

@@ -13,6 +13,7 @@
  */
 
 import Decimal from 'decimal.js';
+import { nanoid } from 'nanoid';
 import { Kysely } from 'kysely';
 import { TenantDatabase } from '../database/types';
 import { appLogger } from '../middleware/logger';
@@ -172,72 +173,81 @@ export class ShareService {
         const newTotalInvested = existingInvested.plus(totalAmount);
         const newAvgCost = newTotalInvested.div(newTotal);
 
-        if (holding) {
-            // Update existing holding
-            const updated = await this.db
-                .updateTable('share_holdings')
-                .set({
-                    total_shares: newTotal as any,
-                    total_invested: newTotalInvested.toString() as any,
-                    average_cost_per_share: newAvgCost.toString() as any,
-                    updated_at: new Date() as any,
+        // Execute all operations atomically in a transaction
+        const txResult = await this.db.transaction().execute(async (trx) => {
+            let txHolding;
+
+            if (holding) {
+                // Update existing holding
+                txHolding = await trx
+                    .updateTable('share_holdings')
+                    .set({
+                        total_shares: newTotal as any,
+                        total_invested: newTotalInvested.toString() as any,
+                        average_cost_per_share: newAvgCost.toString() as any,
+                        updated_at: new Date() as any,
+                    })
+                    .where('id', '=', holding.id)
+                    .returningAll()
+                    .executeTakeFirstOrThrow();
+            } else {
+                // Create new holding
+                const certNumber = `SH-${nanoid(12)}`;
+                txHolding = await trx
+                    .insertInto('share_holdings')
+                    .values({
+                        member_id: input.memberId,
+                        share_class_id: input.shareClassId,
+                        total_shares: input.quantity as any,
+                        average_cost_per_share: unitPrice.toString() as any,
+                        total_invested: totalAmount.toString() as any,
+                        certificate_number: certNumber,
+                        purchase_date: new Date() as any,
+                        is_locked: false as any,
+                        created_by: input.recordedBy,
+                    })
+                    .returningAll()
+                    .executeTakeFirstOrThrow();
+            }
+
+            // Record transaction
+            const transaction = await trx
+                .insertInto('share_transactions')
+                .values({
+                    share_holding_id: txHolding.id,
+                    member_id: input.memberId,
+                    transaction_type: 'purchase' as any,
+                    quantity: input.quantity as any,
+                    unit_price: unitPrice.toString() as any,
+                    total_amount: totalAmount.toString() as any,
+                    transaction_date: new Date() as any,
+                    status: 'completed' as any,
+                    description: `Purchase of ${input.quantity} ${shareClass.name} shares`,
+                    recorded_by: input.recordedBy,
                 })
-                .where('id', '=', holding.id)
                 .returningAll()
                 .executeTakeFirstOrThrow();
-            holding = updated;
-        } else {
-            // Create new holding
-            const certNumber = `SH-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-            holding = await this.db
-                .insertInto('share_holdings')
+
+            // Update share register
+            await trx
+                .insertInto('share_register')
                 .values({
                     member_id: input.memberId,
                     share_class_id: input.shareClassId,
-                    total_shares: input.quantity as any,
-                    average_cost_per_share: unitPrice.toString() as any,
-                    total_invested: totalAmount.toString() as any,
-                    certificate_number: certNumber,
-                    purchase_date: new Date() as any,
-                    is_locked: false as any,
-                    created_by: input.recordedBy,
+                    opening_balance: currentShares as any,
+                    transaction_quantity: input.quantity,
+                    closing_balance: newTotal,
+                    transaction_date: new Date() as any,
+                    reference_type: 'purchase',
+                    reference_id: transaction.id,
                 })
-                .returningAll()
-                .executeTakeFirstOrThrow();
-        }
+                .execute();
 
-        // Record transaction
-        const transaction = await this.db
-            .insertInto('share_transactions')
-            .values({
-                share_holding_id: holding.id,
-                member_id: input.memberId,
-                transaction_type: 'purchase' as any,
-                quantity: input.quantity as any,
-                unit_price: unitPrice.toString() as any,
-                total_amount: totalAmount.toString() as any,
-                transaction_date: new Date() as any,
-                status: 'completed' as any,
-                description: `Purchase of ${input.quantity} ${shareClass.name} shares`,
-                recorded_by: input.recordedBy,
-            })
-            .returningAll()
-            .executeTakeFirstOrThrow();
+            return { holding: txHolding, transaction };
+        });
 
-        // Update share register
-        await this.db
-            .insertInto('share_register')
-            .values({
-                member_id: input.memberId,
-                share_class_id: input.shareClassId,
-                opening_balance: currentShares as any,
-                transaction_quantity: input.quantity,
-                closing_balance: newTotal,
-                transaction_date: new Date() as any,
-                reference_type: 'purchase',
-                reference_id: transaction.id,
-            })
-            .execute();
+        holding = txResult.holding;
+        const transaction = txResult.transaction;
 
         appLogger.info('Shares purchased', {
             memberId: input.memberId,
@@ -265,6 +275,7 @@ export class ShareService {
     /**
      * Transfer shares between members.
      * Validates balances and limits, creates paired transactions, updates register.
+     * All mutations are wrapped in a database transaction for atomicity.
      */
     async transferShares(input: ShareTransferInput): Promise<ShareTransferResult> {
         if (input.fromMemberId === input.toMemberId) {
@@ -333,138 +344,145 @@ export class ShareService {
             : new Decimal(shareClass.current_price?.toString() ?? '0');
         const totalAmount = price.mul(input.quantity);
 
-        // Update sender holding
-        const senderNewTotal = senderShares - input.quantity;
-        const senderNewInvested = new Decimal(fromHolding.total_invested?.toString() ?? '0')
-            .minus(totalAmount);
+        // Wrap all mutations in a database transaction
+        return await this.db.transaction().execute(async (trx) => {
+            // Update sender holding
+            const senderNewTotal = senderShares - input.quantity;
+            const senderNewInvested = new Decimal(fromHolding.total_invested?.toString() ?? '0')
+                .minus(totalAmount);
 
-        await this.db
-            .updateTable('share_holdings')
-            .set({
-                total_shares: senderNewTotal as any,
-                total_invested: Decimal.max(0, senderNewInvested).toString() as any,
-                last_transfer_date: new Date() as any,
-                updated_at: new Date() as any,
-            })
-            .where('id', '=', fromHolding.id)
-            .execute();
-
-        // Update or create receiver holding
-        if (toHolding) {
-            const receiverNewInvested = new Decimal(toHolding.total_invested?.toString() ?? '0')
-                .plus(totalAmount);
-            const receiverAvgCost = receiverNewInvested.div(receiverNewTotal);
-
-            await this.db
+            await trx
                 .updateTable('share_holdings')
                 .set({
-                    total_shares: receiverNewTotal as any,
-                    total_invested: receiverNewInvested.toString() as any,
-                    average_cost_per_share: receiverAvgCost.toString() as any,
+                    total_shares: senderNewTotal as any,
+                    total_invested: Decimal.max(0, senderNewInvested).toString() as any,
                     last_transfer_date: new Date() as any,
                     updated_at: new Date() as any,
                 })
-                .where('id', '=', toHolding.id)
+                .where('id', '=', fromHolding.id)
                 .execute();
-        } else {
-            const certNumber = `SH-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
-            toHolding = await this.db
-                .insertInto('share_holdings')
+
+            // Update or create receiver holding
+            let receiverHoldingId: string;
+            if (toHolding) {
+                const receiverNewInvested = new Decimal(toHolding.total_invested?.toString() ?? '0')
+                    .plus(totalAmount);
+                const receiverAvgCost = receiverNewInvested.div(receiverNewTotal);
+
+                await trx
+                    .updateTable('share_holdings')
+                    .set({
+                        total_shares: receiverNewTotal as any,
+                        total_invested: receiverNewInvested.toString() as any,
+                        average_cost_per_share: receiverAvgCost.toString() as any,
+                        last_transfer_date: new Date() as any,
+                        updated_at: new Date() as any,
+                    })
+                    .where('id', '=', toHolding.id)
+                    .execute();
+                receiverHoldingId = toHolding.id;
+            } else {
+                const certNumber = `SH-${nanoid(12)}`;
+                const newHolding = await trx
+                    .insertInto('share_holdings')
+                    .values({
+                        member_id: input.toMemberId,
+                        share_class_id: input.shareClassId,
+                        total_shares: input.quantity as any,
+                        average_cost_per_share: price.toString() as any,
+                        total_invested: totalAmount.toString() as any,
+                        certificate_number: certNumber,
+                        purchase_date: new Date() as any,
+                        is_locked: false as any,
+                        created_by: input.initiatedBy,
+                    })
+                    .returningAll()
+                    .executeTakeFirstOrThrow();
+                toHolding = newHolding;
+                receiverHoldingId = newHolding.id;
+            }
+
+            // Record sender transaction (transfer_out)
+            const fromTx = await trx
+                .insertInto('share_transactions')
                 .values({
-                    member_id: input.toMemberId,
-                    share_class_id: input.shareClassId,
-                    total_shares: input.quantity as any,
-                    average_cost_per_share: price.toString() as any,
-                    total_invested: totalAmount.toString() as any,
-                    certificate_number: certNumber,
-                    purchase_date: new Date() as any,
-                    is_locked: false as any,
-                    created_by: input.initiatedBy,
+                    share_holding_id: fromHolding.id,
+                    member_id: input.fromMemberId,
+                    transaction_type: 'transfer_out' as any,
+                    quantity: input.quantity as any,
+                    unit_price: price.toString() as any,
+                    total_amount: totalAmount.toString() as any,
+                    counterparty_member_id: input.toMemberId,
+                    transaction_date: new Date() as any,
+                    status: 'completed' as any,
+                    description: `Transfer of ${input.quantity} shares to member`,
+                    recorded_by: input.initiatedBy,
+                    approved_by: input.approvedBy || null,
+                    approved_at: input.approvedBy ? new Date() as any : null,
                 })
                 .returningAll()
                 .executeTakeFirstOrThrow();
-        }
 
-        // Record sender transaction (transfer_out)
-        const fromTx = await this.db
-            .insertInto('share_transactions')
-            .values({
-                share_holding_id: fromHolding.id,
-                member_id: input.fromMemberId,
-                transaction_type: 'transfer_out' as any,
-                quantity: input.quantity as any,
-                unit_price: price.toString() as any,
-                total_amount: totalAmount.toString() as any,
-                counterparty_member_id: input.toMemberId,
-                transaction_date: new Date() as any,
-                status: 'completed' as any,
-                description: `Transfer of ${input.quantity} shares to member`,
-                recorded_by: input.initiatedBy,
-                approved_by: input.approvedBy || null,
-                approved_at: input.approvedBy ? new Date() as any : null,
-            })
-            .returningAll()
-            .executeTakeFirstOrThrow();
+            // Record receiver transaction (transfer_in)
+            const toTx = await trx
+                .insertInto('share_transactions')
+                .values({
+                    share_holding_id: receiverHoldingId,
+                    member_id: input.toMemberId,
+                    transaction_type: 'transfer_in' as any,
+                    quantity: input.quantity as any,
+                    unit_price: price.toString() as any,
+                    total_amount: totalAmount.toString() as any,
+                    counterparty_member_id: input.fromMemberId,
+                    related_transaction_id: fromTx.id,
+                    transaction_date: new Date() as any,
+                    status: 'completed' as any,
+                    description: `Transfer of ${input.quantity} shares from member`,
+                    recorded_by: input.initiatedBy,
+                    approved_by: input.approvedBy || null,
+                    approved_at: input.approvedBy ? new Date() as any : null,
+                })
+                .returningAll()
+                .executeTakeFirstOrThrow();
 
-        // Record receiver transaction (transfer_in)
-        const toTx = await this.db
-            .insertInto('share_transactions')
-            .values({
-                share_holding_id: toHolding!.id,
-                member_id: input.toMemberId,
-                transaction_type: 'transfer_in' as any,
-                quantity: input.quantity as any,
-                unit_price: price.toString() as any,
-                total_amount: totalAmount.toString() as any,
-                counterparty_member_id: input.fromMemberId,
-                related_transaction_id: fromTx.id,
-                transaction_date: new Date() as any,
-                status: 'completed' as any,
-                description: `Transfer of ${input.quantity} shares from member`,
-                recorded_by: input.initiatedBy,
-                approved_by: input.approvedBy || null,
-                approved_at: input.approvedBy ? new Date() as any : null,
-            })
-            .returningAll()
-            .executeTakeFirstOrThrow();
+            // Update share register for both members
+            await trx.insertInto('share_register').values([
+                {
+                    member_id: input.fromMemberId,
+                    share_class_id: input.shareClassId,
+                    opening_balance: senderShares as any,
+                    transaction_quantity: -input.quantity,
+                    closing_balance: senderNewTotal,
+                    transaction_date: new Date() as any,
+                    reference_type: 'transfer_out',
+                    reference_id: fromTx.id,
+                },
+                {
+                    member_id: input.toMemberId,
+                    share_class_id: input.shareClassId,
+                    opening_balance: receiverCurrentShares as any,
+                    transaction_quantity: input.quantity,
+                    closing_balance: receiverNewTotal,
+                    transaction_date: new Date() as any,
+                    reference_type: 'transfer_in',
+                    reference_id: toTx.id,
+                },
+            ]).execute();
 
-        // Update share register for both members
-        await this.db.insertInto('share_register').values([
-            {
-                member_id: input.fromMemberId,
-                share_class_id: input.shareClassId,
-                opening_balance: senderShares as any,
-                transaction_quantity: -input.quantity,
-                closing_balance: senderNewTotal,
-                transaction_date: new Date() as any,
-                reference_type: 'transfer_out',
-                reference_id: fromTx.id,
-            },
-            {
-                member_id: input.toMemberId,
-                share_class_id: input.shareClassId,
-                opening_balance: receiverCurrentShares as any,
-                transaction_quantity: input.quantity,
-                closing_balance: receiverNewTotal,
-                transaction_date: new Date() as any,
-                reference_type: 'transfer_in',
-                reference_id: toTx.id,
-            },
-        ]).execute();
+            appLogger.info('Shares transferred', {
+                from: input.fromMemberId,
+                to: input.toMemberId,
+                quantity: input.quantity,
+                shareClass: shareClass.code,
+            });
 
-        appLogger.info('Shares transferred', {
-            from: input.fromMemberId,
-            to: input.toMemberId,
-            quantity: input.quantity,
-            shareClass: shareClass.code,
+            return {
+                fromTransaction: { id: fromTx.id },
+                toTransaction: { id: toTx.id },
+                quantity: input.quantity,
+                totalAmount: totalAmount.toFixed(2),
+            };
         });
-
-        return {
-            fromTransaction: { id: fromTx.id },
-            toTransaction: { id: toTx.id },
-            quantity: input.quantity,
-            totalAmount: totalAmount.toFixed(2),
-        };
     }
 
     /**

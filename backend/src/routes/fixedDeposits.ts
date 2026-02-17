@@ -1,6 +1,7 @@
 // src/routes/fixedDeposits.ts
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { nanoid } from 'nanoid';
 import { Env } from '../middleware/types';
 import { validate, getValidatedData, commonSchemas } from '../middleware/validation';
 import { NotFoundError, UnauthorizedError } from '../middleware/errorHandler';
@@ -343,7 +344,7 @@ fixedDepositRoutes.post('/open', validate(openFdSchema), async (c) => {
             maturityDate.setDate(maturityDate.getDate() + tenureDays);
         }
 
-        const certNumber = `FD-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+        const certNumber = `FD-${nanoid(12)}`;
 
         const fd = await db
             .insertInto('fixed_deposits')
@@ -459,7 +460,7 @@ fixedDepositRoutes.post('/:depositId/withdraw', validate(prematureWithdrawalSche
  * GET /fixed-deposits/:depositId/certificate
  * Get FD certificate data
  */
-fixedDepositRoutes.get('/:depositId/certificate', async (c) => {
+fixedDepositRoutes.get('/:depositId/certificate', enforcePermission('fixed_deposits', 'read'), async (c) => {
     try {
         const { depositId } = c.req.param();
         const db = c.get('db')!;
@@ -527,7 +528,7 @@ fixedDepositRoutes.get('/:depositId/certificate', async (c) => {
  * GET /fixed-deposits/:depositId/alerts
  * Get maturity alerts for an FD
  */
-fixedDepositRoutes.get('/:depositId/alerts', async (c) => {
+fixedDepositRoutes.get('/:depositId/alerts', enforcePermission('fixed_deposits', 'read'), async (c) => {
     try {
         const { depositId } = c.req.param();
         const db = c.get('db')!;
@@ -965,7 +966,7 @@ fixedDepositRoutes.get('/analytics', enforcePermission('fixed_deposits', 'read')
  * GET /fixed-deposits/:depositId/interest-preview
  * Preview interest calculation for an FD
  */
-fixedDepositRoutes.get('/:depositId/interest-preview', async (c) => {
+fixedDepositRoutes.get('/:depositId/interest-preview', enforcePermission('fixed_deposits', 'read'), async (c) => {
     try {
         const { depositId } = c.req.param();
         const db = c.get('db')!;
@@ -1039,7 +1040,7 @@ fixedDepositRoutes.get('/:depositId/interest-preview', async (c) => {
  * GET /fixed-deposits/:depositId/interest-breakdown
  * Get detailed interest breakdown by period
  */
-fixedDepositRoutes.get('/:depositId/interest-breakdown', async (c) => {
+fixedDepositRoutes.get('/:depositId/interest-breakdown', enforcePermission('fixed_deposits', 'read'), async (c) => {
     try {
         const { depositId } = c.req.param();
         const db = c.get('db')!;
@@ -1086,7 +1087,7 @@ fixedDepositRoutes.get('/:depositId/interest-breakdown', async (c) => {
  * GET /fixed-deposits/members/:memberId
  * List all FDs for a specific member
  */
-fixedDepositRoutes.get('/members/:memberId', async (c) => {
+fixedDepositRoutes.get('/members/:memberId', enforcePermission('fixed_deposits', 'read'), async (c) => {
     try {
         const { memberId } = c.req.param();
         const db = c.get('db')!;
@@ -1127,7 +1128,7 @@ fixedDepositRoutes.get('/members/:memberId', async (c) => {
  * GET /fixed-deposits/members/:memberId/summary
  * Get summary of a member's FD portfolio
  */
-fixedDepositRoutes.get('/members/:memberId/summary', async (c) => {
+fixedDepositRoutes.get('/members/:memberId/summary', enforcePermission('fixed_deposits', 'read'), async (c) => {
     try {
         const { memberId } = c.req.param();
         const db = c.get('db')!;
@@ -1238,11 +1239,15 @@ fixedDepositRoutes.post('/:depositId/premature-withdrawal', validate(prematureWi
 // FD ROLLOVER
 // =============================================================================
 
+const rolloverSchema = z.object({
+    rollover_type: z.enum(['principal_only', 'principal_plus_interest']).default('principal_only'),
+});
+
 /**
  * POST /fixed-deposits/:depositId/rollover
  * Manually rollover a matured FD
  */
-fixedDepositRoutes.post('/:depositId/rollover', async (c) => {
+fixedDepositRoutes.post('/:depositId/rollover', validate(rolloverSchema), async (c) => {
     try {
         const { depositId } = c.req.param();
         const user = c.get('user');
@@ -1252,8 +1257,8 @@ fixedDepositRoutes.post('/:depositId/rollover', async (c) => {
             throw new UnauthorizedError('Insufficient permissions');
         }
 
-        const body = await c.req.json().catch(() => ({}));
-        const rolloverType = body.rollover_type || 'principal_only';
+        const data = getValidatedData<z.infer<typeof rolloverSchema>>(c);
+        const rolloverType = data.rollover_type;
 
         // Get FD
         const fd = await db
@@ -1310,7 +1315,7 @@ fixedDepositRoutes.post('/:depositId/rollover', async (c) => {
             newMaturityDate.setDate(newMaturityDate.getDate() + tenureDays);
         }
 
-        const newCertNumber = `FD-${Date.now().toString(36).toUpperCase()}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`;
+        const newCertNumber = `FD-${nanoid(12)}`;
 
         // Create new FD
         const newFd = await db
@@ -1381,7 +1386,7 @@ fixedDepositRoutes.post('/:depositId/rollover', async (c) => {
  * GET /fixed-deposits/products/:productId/analytics
  * Get analytics for a specific FD product
  */
-fixedDepositRoutes.get('/products/:productId/analytics', async (c) => {
+fixedDepositRoutes.get('/products/:productId/analytics', enforcePermission('fixed_deposits', 'read'), async (c) => {
     try {
         const { productId } = c.req.param();
         const db = c.get('db')!;
@@ -1439,7 +1444,7 @@ fixedDepositRoutes.get('/products/:productId/analytics', async (c) => {
  * Get FD details with interest schedule
  * NOTE: This route must be defined AFTER all specific routes to avoid conflicts
  */
-fixedDepositRoutes.get('/:depositId', async (c) => {
+fixedDepositRoutes.get('/:depositId', enforcePermission('fixed_deposits', 'read'), async (c) => {
     try {
         const { depositId } = c.req.param();
         const db = c.get('db')!;

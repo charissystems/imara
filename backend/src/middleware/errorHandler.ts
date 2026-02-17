@@ -90,7 +90,7 @@ function formatErrorResponse(err: Error, c: Context) {
                 code: err.code,
                 message: err.message,
                 statusCode: err.statusCode,
-                ...(err.details && { details: err.details }),
+                ...(isDev && err.details && { details: err.details }),
                 ...(isDev && { stack: err.stack }),
             },
             meta: {

@@ -44,14 +44,22 @@ export abstract class BaseRepository {
         try {
             return await operation();
         } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : 'Unknown database error';
+            const rawMessage = error instanceof Error ? error.message : 'Unknown database error';
+            // Sanitize: strip SQL fragments and internal details for the user-facing message
+            const safeMessage = `${operationName} failed`;
             const details = {
                 operation: operationName,
                 schema: this.schemaName,
-                originalError: errorMessage,
+                // Only include raw error details in development
+                ...(process.env.NODE_ENV !== 'production' && { originalError: rawMessage }),
                 ...context,
             };
-            throw new DatabaseError(`${operationName} failed: ${errorMessage}`, details);
+            appLogger.error(`Database operation failed: ${rawMessage}`, error as Error, {
+                operation: operationName,
+                schema: this.schemaName,
+                ...context,
+            });
+            throw new DatabaseError(safeMessage, details);
         }
     }
 }

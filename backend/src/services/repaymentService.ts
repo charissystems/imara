@@ -15,6 +15,7 @@
  */
 
 import Decimal from 'decimal.js';
+import { nanoid } from 'nanoid';
 import { Kysely, sql } from 'kysely';
 import { TenantDatabase } from '../database/types';
 import { ScheduleCalculator } from './scheduleCalculator';
@@ -95,6 +96,8 @@ export class RepaymentService {
      * 4. Create loan_repayments record
      * 5. Update loan_accounts outstanding balances
      * 6. If balance is zero, mark loan as closed
+     *
+     * All mutations are wrapped in a database transaction for atomicity.
      */
     async processRepayment(input: ProcessRepaymentInput): Promise<ProcessRepaymentResult> {
         const paymentAmount = new Decimal(input.amount);
@@ -140,157 +143,158 @@ export class RepaymentService {
             throw new Error('No outstanding installments found for this loan');
         }
 
-        // 4. Walk through installments allocating payment
-        let remaining = paymentAmount;
-        let totalAllocatedPenalty = new Decimal(0);
-        let totalAllocatedInterest = new Decimal(0);
-        let totalAllocatedPrincipal = new Decimal(0);
-        let installmentsFullyPaid = 0;
-        let installmentsPartiallyPaid = 0;
+        // Wrap all mutations in a database transaction for atomicity
+        return await this.db.transaction().execute(async (trx) => {
+            // 4. Walk through installments allocating payment
+            let remaining = paymentAmount;
+            let totalAllocatedPenalty = new Decimal(0);
+            let totalAllocatedInterest = new Decimal(0);
+            let totalAllocatedPrincipal = new Decimal(0);
+            let installmentsFullyPaid = 0;
+            let installmentsPartiallyPaid = 0;
 
-        const dailyPenaltyRate = new Decimal(product.late_payment_penalty?.toString() ?? '0');
+            const dailyPenaltyRate = new Decimal(product.late_payment_penalty?.toString() ?? '0');
 
-        for (const inst of installments) {
-            if (remaining.lte(0)) break;
+            for (const inst of installments) {
+                if (remaining.lte(0)) break;
 
-            const dueDate = new Date(inst.due_date as any);
-            const daysOverdue = Math.max(
-                0,
-                Math.floor((repaymentDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24)),
-            );
+                const dueDate = new Date(inst.due_date as any);
+                const daysOverdue = Math.max(
+                    0,
+                    Math.floor((repaymentDate.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24)),
+                );
 
-            // Calculate penalty for this installment if overdue
-            const outstandingPrincipal = new Decimal(inst.principal_payment?.toString() ?? '0');
-            const outstandingInterest = new Decimal(inst.interest_payment?.toString() ?? '0');
-            const existingPenalty = new Decimal(inst.penalty_payment?.toString() ?? '0');
+                // Calculate penalty for this installment if overdue
+                const outstandingPrincipal = new Decimal(inst.principal_payment?.toString() ?? '0');
+                const outstandingInterest = new Decimal(inst.interest_payment?.toString() ?? '0');
+                const existingPenalty = new Decimal(inst.penalty_payment?.toString() ?? '0');
 
-            let penalty = existingPenalty;
-            if (daysOverdue > 0 && dailyPenaltyRate.gt(0)) {
-                const computedPenalty = ScheduleCalculator.calculatePenalty({
-                    overdueAmount: outstandingPrincipal.plus(outstandingInterest),
-                    dailyPenaltyRate,
-                    daysOverdue,
-                    penaltyCapPercent: 100, // cap at 100% of overdue amount
+                let penalty = existingPenalty;
+                if (daysOverdue > 0 && dailyPenaltyRate.gt(0)) {
+                    const computedPenalty = ScheduleCalculator.calculatePenalty({
+                        overdueAmount: outstandingPrincipal.plus(outstandingInterest),
+                        dailyPenaltyRate,
+                        daysOverdue,
+                        penaltyCapPercent: 100, // cap at 100% of overdue amount
+                    });
+                    // Use the larger of existing or computed (penalties accumulate)
+                    penalty = Decimal.max(existingPenalty, computedPenalty);
+                }
+
+                // Allocate payment for this installment
+                const allocation = ScheduleCalculator.allocateRepayment({
+                    paymentAmount: remaining,
+                    pendingPenalty: penalty,
+                    pendingInterest: outstandingInterest,
+                    pendingPrincipal: outstandingPrincipal,
                 });
-                // Use the larger of existing or computed (penalties accumulate)
-                penalty = Decimal.max(existingPenalty, computedPenalty);
+
+                totalAllocatedPenalty = totalAllocatedPenalty.plus(allocation.allocatedPenalty);
+                totalAllocatedInterest = totalAllocatedInterest.plus(allocation.allocatedInterest);
+                totalAllocatedPrincipal = totalAllocatedPrincipal.plus(allocation.allocatedPrincipal);
+                remaining = allocation.overpayment;
+
+                // Determine new installment status
+                const fullyPaid =
+                    allocation.fullyCovered.penalty &&
+                    allocation.fullyCovered.interest &&
+                    allocation.fullyCovered.principal;
+
+                const newStatus = fullyPaid ? 'paid' : 'partial';
+
+                if (fullyPaid) {
+                    installmentsFullyPaid++;
+                } else {
+                    installmentsPartiallyPaid++;
+                }
+
+                // 5. Update the installment (inside transaction)
+                await trx
+                    .updateTable('loan_schedules')
+                    .set({
+                        penalty_payment: allocation.allocatedPenalty.toString() as any,
+                        status: newStatus as any,
+                        days_overdue: daysOverdue,
+                        paid_date: fullyPaid ? (repaymentDate as any) : undefined,
+                        payment_method: input.paymentMethod as any,
+                        payment_reference: input.paymentReference ?? null,
+                        updated_at: new Date() as any,
+                    })
+                    .where('id', '=', inst.id)
+                    .execute();
             }
 
-            // Allocate payment for this installment
-            const allocation = ScheduleCalculator.allocateRepayment({
-                paymentAmount: remaining,
-                pendingPenalty: penalty,
-                pendingInterest: outstandingInterest,
-                pendingPrincipal: outstandingPrincipal,
-            });
+            // 6. Create repayment record (inside transaction)
+            const repaymentNumber = `RPY-${nanoid(12)}`;
 
-            totalAllocatedPenalty = totalAllocatedPenalty.plus(allocation.allocatedPenalty);
-            totalAllocatedInterest = totalAllocatedInterest.plus(allocation.allocatedInterest);
-            totalAllocatedPrincipal = totalAllocatedPrincipal.plus(allocation.allocatedPrincipal);
-            remaining = allocation.overpayment;
-
-            // Determine new installment status
-            const fullyPaid =
-                allocation.fullyCovered.penalty &&
-                allocation.fullyCovered.interest &&
-                allocation.fullyCovered.principal;
-
-            const newStatus = fullyPaid ? 'paid' : 'partial';
-
-            if (fullyPaid) {
-                installmentsFullyPaid++;
-            } else {
-                installmentsPartiallyPaid++;
-            }
-
-            // 5. Update the installment
-            await this.db
-                .updateTable('loan_schedules')
-                .set({
-                    penalty_payment: allocation.allocatedPenalty.toString() as any,
-                    status: newStatus as any,
-                    days_overdue: daysOverdue,
-                    paid_date: fullyPaid ? (repaymentDate as any) : undefined,
+            const [repayment] = await trx
+                .insertInto('loan_repayments')
+                .values({
+                    loan_account_id: input.loanAccountId,
+                    repayment_number: repaymentNumber,
+                    repayment_date: repaymentDate as any,
+                    principal_payment: totalAllocatedPrincipal.toString() as any,
+                    interest_payment: totalAllocatedInterest.toString() as any,
+                    penalty_payment: totalAllocatedPenalty.toString() as any,
+                    total_payment: paymentAmount.minus(remaining).toString() as any,
                     payment_method: input.paymentMethod as any,
                     payment_reference: input.paymentReference ?? null,
+                    status: 'posted' as any,
+                    recorded_by: input.recordedBy,
+                })
+                .returning('id')
+                .execute();
+
+            // 7. Update loan account outstanding balances (inside transaction)
+            const currentPrincipal = new Decimal(loan.principal_outstanding?.toString() ?? '0');
+            const currentInterest = new Decimal(loan.interest_outstanding?.toString() ?? '0');
+            const currentPenalties = new Decimal(loan.penalties_outstanding?.toString() ?? '0');
+
+            const newPrincipal = currentPrincipal.minus(totalAllocatedPrincipal);
+            const newInterest = currentInterest.minus(totalAllocatedInterest);
+            const newPenalties = currentPenalties.minus(totalAllocatedPenalty);
+
+            const newTotal = Decimal.max(0, newPrincipal.plus(newInterest).plus(newPenalties));
+            const loanFullyRepaid = newTotal.lte(0);
+
+            await trx
+                .updateTable('loan_accounts')
+                .set({
+                    principal_outstanding: Decimal.max(0, newPrincipal).toString() as any,
+                    interest_outstanding: Decimal.max(0, newInterest).toString() as any,
+                    penalties_outstanding: Decimal.max(0, newPenalties).toString() as any,
+                    total_outstanding: Decimal.max(0, newTotal).toString() as any,
+                    status: loanFullyRepaid ? ('closed' as any) : loan.status,
                     updated_at: new Date() as any,
                 })
-                .where('id', '=', inst.id)
+                .where('id', '=', input.loanAccountId)
                 .execute();
-        }
 
-        // 6. Create repayment record
-        const repaymentNumber = `RPY-${Date.now()}-${Math.random().toString(36).substring(2, 7).toUpperCase()}`;
+            appLogger.info('Repayment processed', {
+                loanAccountId: input.loanAccountId,
+                amount: paymentAmount.toString(),
+                allocatedPenalty: totalAllocatedPenalty.toString(),
+                allocatedInterest: totalAllocatedInterest.toString(),
+                allocatedPrincipal: totalAllocatedPrincipal.toString(),
+                overpayment: remaining.toString(),
+                installmentsFullyPaid,
+                loanFullyRepaid,
+            });
 
-        const [repayment] = await this.db
-            .insertInto('loan_repayments')
-            .values({
-                loan_account_id: input.loanAccountId,
-                repayment_number: repaymentNumber,
-                repayment_date: repaymentDate as any,
-                principal_payment: totalAllocatedPrincipal.toString() as any,
-                interest_payment: totalAllocatedInterest.toString() as any,
-                penalty_payment: totalAllocatedPenalty.toString() as any,
-                total_payment: paymentAmount.minus(remaining).toString() as any,
-                payment_method: input.paymentMethod as any,
-                payment_reference: input.paymentReference ?? null,
-                status: 'posted' as any,
-                recorded_by: input.recordedBy,
-            })
-            .returning('id')
-            .execute();
-
-        // 7. Update loan account outstanding balances
-        const currentPrincipal = new Decimal(loan.principal_outstanding?.toString() ?? '0');
-        const currentInterest = new Decimal(loan.interest_outstanding?.toString() ?? '0');
-        const currentPenalties = new Decimal(loan.penalties_outstanding?.toString() ?? '0');
-
-        const newPrincipal = currentPrincipal.minus(totalAllocatedPrincipal);
-        const newInterest = currentInterest.minus(totalAllocatedInterest);
-        const newPenalties = currentPenalties
-            .minus(totalAllocatedPenalty)
-            .plus(totalAllocatedPenalty); // net effect of penalties charged & paid
-
-        const newTotal = Decimal.max(0, newPrincipal.plus(newInterest).plus(newPenalties));
-        const loanFullyRepaid = newTotal.lte(0);
-
-        await this.db
-            .updateTable('loan_accounts')
-            .set({
-                principal_outstanding: Decimal.max(0, newPrincipal).toString() as any,
-                interest_outstanding: Decimal.max(0, newInterest).toString() as any,
-                penalties_outstanding: Decimal.max(0, newPenalties).toString() as any,
-                total_outstanding: Decimal.max(0, newTotal).toString() as any,
-                status: loanFullyRepaid ? ('closed' as any) : loan.status,
-                updated_at: new Date() as any,
-            })
-            .where('id', '=', input.loanAccountId)
-            .execute();
-
-        appLogger.info('Repayment processed', {
-            loanAccountId: input.loanAccountId,
-            amount: paymentAmount.toString(),
-            allocatedPenalty: totalAllocatedPenalty.toString(),
-            allocatedInterest: totalAllocatedInterest.toString(),
-            allocatedPrincipal: totalAllocatedPrincipal.toString(),
-            overpayment: remaining.toString(),
-            installmentsFullyPaid,
-            loanFullyRepaid,
+            return {
+                repaymentId: repayment.id,
+                loanAccountId: input.loanAccountId,
+                totalPaid: paymentAmount.minus(remaining),
+                allocatedPenalty: totalAllocatedPenalty,
+                allocatedInterest: totalAllocatedInterest,
+                allocatedPrincipal: totalAllocatedPrincipal,
+                overpayment: remaining,
+                installmentsFullyPaid,
+                installmentsPartiallyPaid,
+                remainingBalance: Decimal.max(0, newTotal),
+                loanFullyRepaid,
+            };
         });
-
-        return {
-            repaymentId: repayment.id,
-            loanAccountId: input.loanAccountId,
-            totalPaid: paymentAmount.minus(remaining),
-            allocatedPenalty: totalAllocatedPenalty,
-            allocatedInterest: totalAllocatedInterest,
-            allocatedPrincipal: totalAllocatedPrincipal,
-            overpayment: remaining,
-            installmentsFullyPaid,
-            installmentsPartiallyPaid,
-            remainingBalance: Decimal.max(0, newTotal),
-            loanFullyRepaid,
-        };
     }
 
     /**
@@ -543,40 +547,43 @@ export class RepaymentService {
         reason: string,
         writtenOffBy: string,
     ): Promise<void> {
-        // Mark all outstanding installments as written off
-        await this.db
-            .updateTable('loan_schedules')
-            .set({
-                status: 'written_off' as any,
-                updated_at: new Date() as any,
-            })
-            .where('loan_account_id', '=', loanAccountId)
-            .where('status', 'in', ['scheduled', 'partial', 'overdue'])
-            .execute();
+        // Execute all write-off operations atomically in a transaction
+        await this.db.transaction().execute(async (trx) => {
+            // Mark all outstanding installments as written off
+            await trx
+                .updateTable('loan_schedules')
+                .set({
+                    status: 'written_off' as any,
+                    updated_at: new Date() as any,
+                })
+                .where('loan_account_id', '=', loanAccountId)
+                .where('status', 'in', ['scheduled', 'partial', 'overdue'])
+                .execute();
 
-        // Mark loan as written off
-        await this.db
-            .updateTable('loan_accounts')
-            .set({
-                status: 'written_off' as any,
-                updated_at: new Date() as any,
-            })
-            .where('id', '=', loanAccountId)
-            .execute();
+            // Mark loan as written off
+            await trx
+                .updateTable('loan_accounts')
+                .set({
+                    status: 'written_off' as any,
+                    updated_at: new Date() as any,
+                })
+                .where('id', '=', loanAccountId)
+                .execute();
 
-        // Record recovery action
-        await this.db
-            .insertInto('loan_recovery_actions')
-            .values({
-                loan_account_id: loanAccountId,
-                action_type: 'write_off' as any,
-                action_date: new Date() as any,
-                description: reason,
-                amount_recovered: new Decimal(0) as any,
-                status: 'completed' as any,
-                created_by: writtenOffBy,
-            })
-            .execute();
+            // Record recovery action
+            await trx
+                .insertInto('loan_recovery_actions')
+                .values({
+                    loan_account_id: loanAccountId,
+                    action_type: 'write_off' as any,
+                    action_date: new Date() as any,
+                    description: reason,
+                    amount_recovered: new Decimal(0) as any,
+                    status: 'completed' as any,
+                    created_by: writtenOffBy,
+                })
+                .execute();
+        });
 
         appLogger.info('Loan written off', {
             loanAccountId,

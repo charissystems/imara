@@ -1,3 +1,17 @@
+-- Shared trigger function: auto-update updated_at timestamp.
+-- Defined here (migration 000) because subsequent migrations in this file
+-- attach it to triggers before 001_init_registry.sql (where the canonical
+-- definition lives) has run. CREATE OR REPLACE keeps this idempotent.
+CREATE OR REPLACE FUNCTION public.update_updated_at_column()
+    RETURNS TRIGGER
+    AS $$
+BEGIN
+    NEW.updated_at = clock_timestamp();
+    RETURN NEW;
+END;
+$$
+LANGUAGE plpgsql;
+
 -- REFERENCE DATA: Currencies
 CREATE TABLE public.currencies(
     code varchar(3) PRIMARY KEY,

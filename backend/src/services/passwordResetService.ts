@@ -148,8 +148,8 @@ export class PasswordResetService {
     ): Promise<ResetPasswordResult> {
         const redisKey = this.getRedisKey(token);
 
-        // Retrieve token data from Redis
-        const raw = await this.redis.get(redisKey);
+        // Atomically retrieve and delete the token to prevent race-condition reuse
+        const raw = await this.redis.getdel(redisKey);
         if (!raw) {
             return {
                 success: false,
@@ -175,9 +175,6 @@ export class PasswordResetService {
         const authRepo = new AuthRepository(this.schemaName);
         await authRepo.updatePassword(tokenData.staffId, passwordHash);
 
-        // Delete token (single-use)
-        await this.redis.del(redisKey);
-
         appLogger.success('Password reset completed', {
             staffId: tokenData.staffId,
             schema: this.schemaName,
@@ -190,12 +187,15 @@ export class PasswordResetService {
     }
 
     /**
-     * Validate a reset token without consuming it.
+     * Validate a reset token by atomically consuming it.
+     * Returns true if the token was valid (and is now deleted), false otherwise.
+     * @deprecated Prefer calling resetPassword() directly which validates and consumes.
      */
     async validateToken(token: string): Promise<boolean> {
         const redisKey = this.getRedisKey(token);
-        const exists = await this.redis.exists(redisKey);
-        return exists === 1;
+        // Atomically get and delete to prevent reuse
+        const result = await this.redis.getdel(redisKey);
+        return result !== null;
     }
 
     // ──────────────────────────────────────────────
@@ -207,7 +207,10 @@ export class PasswordResetService {
      */
     private generateToken(): string {
         const bytes = randomBytes(32);
-        const secret = process.env.JWT_SECRET || 'reset-token-secret';
+        const secret = process.env.JWT_SECRET;
+        if (!secret) {
+            throw new Error('JWT_SECRET environment variable is required for token generation');
+        }
         return createHmac('sha256', secret)
             .update(bytes)
             .digest('hex');

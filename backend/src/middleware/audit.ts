@@ -1,5 +1,6 @@
 // src/middleware/audit.ts
 import { Context, Next } from 'hono';
+import { nanoid } from 'nanoid';
 import { Kysely } from 'kysely';
 import { Env } from './types';
 import { appLogger } from './logger';
@@ -124,7 +125,7 @@ export class AuditLogger {
      * Generate unique audit log ID
      */
     private generateAuditId(): string {
-        return `AUD-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+        return `AUD-${nanoid(12)}`;
     }
 
     /**
@@ -306,6 +307,33 @@ export class AuditLogger {
 }
 
 /**
+ * Sanitize an IP address: accept only valid IPv4/IPv6 characters.
+ * Strips spoofed or malformed values from X-Forwarded-For.
+ */
+function sanitizeIp(raw?: string | null): string | undefined {
+    if (!raw) return undefined;
+    // Take the first entry from comma-separated list
+    const first = raw.split(',')[0].trim();
+    // Allow only valid IP characters (digits, dots, colons, hex for IPv6, brackets)
+    if (/^[\da-fA-F.:[\]]+$/.test(first) && first.length <= 45) {
+        return first;
+    }
+    return undefined;
+}
+
+/**
+ * Sanitize User-Agent: strip control characters and truncate.
+ */
+function sanitizeUserAgent(raw?: string | null): string | undefined {
+    if (!raw) return undefined;
+    // Remove control characters (ASCII 0-31, 127)
+    // eslint-disable-next-line no-control-regex
+    const cleaned = raw.replace(/[\x00-\x1F\x7F]/g, '').trim();
+    // Truncate to 512 characters
+    return cleaned.slice(0, 512) || undefined;
+}
+
+/**
  * Middleware: Inject audit logger into context
  * Usage: c.get('auditLogger').logCreateRecord('members', memberId, memberData)
  * 
@@ -316,10 +344,10 @@ export async function auditMiddleware(c: Context<Env>, next: Next) {
     const user = c.get('user');
     const db = c.get('db');
     
-    // Extract request context for audit trail
+    // Extract and sanitize request context for audit trail
     const requestContext = {
-        ip: c.req.header('x-forwarded-for') || c.req.header('cf-connecting-ip'),
-        userAgent: c.req.header('user-agent'),
+        ip: sanitizeIp(c.req.header('x-forwarded-for') || c.req.header('cf-connecting-ip')),
+        userAgent: sanitizeUserAgent(c.req.header('user-agent')),
     };
 
     // Create audit logger instance for this tenant

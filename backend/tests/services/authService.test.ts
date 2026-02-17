@@ -5,23 +5,27 @@ import { AuthService, AuthJWTPayload } from '../../src/services/authService';
 describe('AuthService', () => {
     let authService: AuthService;
     const testSecret = 'test-secret-key-12345';
+    const testRefreshSecret = 'test-refresh-secret-key-67890';
 
     beforeEach(() => {
-        authService = new AuthService(testSecret);
+        authService = new AuthService(testSecret, testRefreshSecret);
     });
 
     describe('constructor', () => {
         it('should initialize with provided secret', () => {
-            const service = new AuthService('custom-secret');
+            const service = new AuthService('custom-secret', 'custom-refresh-secret');
             expect(service).toBeDefined();
         });
 
         it('should use JWT_SECRET environment variable if no secret provided', () => {
             const originalEnv = process.env.JWT_SECRET;
+            const originalRefreshEnv = process.env.REFRESH_TOKEN_SECRET;
             process.env.JWT_SECRET = 'env-secret';
+            process.env.REFRESH_TOKEN_SECRET = 'env-refresh-secret';
             const service = new AuthService();
             expect(service).toBeDefined();
             process.env.JWT_SECRET = originalEnv;
+            process.env.REFRESH_TOKEN_SECRET = originalRefreshEnv;
         });
     });
 
@@ -136,7 +140,7 @@ describe('AuthService', () => {
             expect(decoded?.exp).toBeDefined();
             expect(decoded?.iat).toBeDefined();
             const expirationDurationSeconds = (decoded?.exp || 0) - (decoded?.iat || 0);
-            expect(expirationDurationSeconds).toBe(24 * 60 * 60); // 24 hours
+            expect(expirationDurationSeconds).toBe(30 * 60); // 30 minutes
         });
     });
 
@@ -166,7 +170,7 @@ describe('AuthService', () => {
             const refreshToken = await authService.generateRefreshToken(staff as any);
 
             const accessPayload = await authService.verifyToken(accessToken);
-            const refreshPayload = await authService.verifyToken(refreshToken);
+            const refreshPayload = await authService.verifyRefreshToken(refreshToken);
 
             const accessDuration = (accessPayload?.exp || 0) - (accessPayload?.iat || 0);
             const refreshDuration = (refreshPayload?.exp || 0) - (refreshPayload?.iat || 0);
@@ -182,7 +186,7 @@ describe('AuthService', () => {
             };
 
             const token = await authService.generateRefreshToken(staff as any);
-            const decoded = await authService.verifyToken(token);
+            const decoded = await authService.verifyRefreshToken(token);
 
             const expirationDurationSeconds = (decoded?.exp || 0) - (decoded?.iat || 0);
             expect(expirationDurationSeconds).toBe(7 * 24 * 60 * 60); // 7 days
@@ -196,9 +200,22 @@ describe('AuthService', () => {
             };
 
             const token = await authService.generateRefreshToken(staff as any);
-            const decoded = await authService.verifyToken(token);
+            const decoded = await authService.verifyRefreshToken(token);
 
             expect((decoded as any)?.type).toBe('refresh');
+        });
+
+        it('should not be verifiable with access token secret', async () => {
+            const staff = {
+                id: 'staff-555',
+                email: 'test@example.com',
+                staff_number: 'STF008X',
+            };
+
+            const token = await authService.generateRefreshToken(staff as any);
+            // verifyToken defaults to access type, which uses access secret
+            const decoded = await authService.verifyToken(token);
+            expect(decoded).toBeNull();
         });
     });
 
@@ -282,9 +299,15 @@ describe('AuthService', () => {
         });
     });
 
-    describe('getTokenExpirationHours', () => {
-        it('should return 24 hours', () => {
-            expect(authService.getTokenExpirationHours()).toBe(24);
+    describe('getTokenExpirationMinutes', () => {
+        it('should return 30 minutes', () => {
+            expect(authService.getTokenExpirationMinutes()).toBe(30);
+        });
+    });
+
+    describe('getTokenExpirationHours (deprecated)', () => {
+        it('should return 0.5 hours (30 min / 60)', () => {
+            expect(authService.getTokenExpirationHours()).toBe(0.5);
         });
     });
 

@@ -8,6 +8,8 @@ import { ValidationError, NotFoundError, UnauthorizedError } from '../middleware
 import { AccountRepository } from '../repositories/accountRepository';
 import { SavingsService } from '../services/savingsService';
 import { hasPermission, enforcePermission } from '../middleware/rbac';
+import { rateLimit } from '../middleware/rateLimiter';
+import { getTenantDb } from '../config/database';
 
 export const accountRoutes = new Hono<Env>();
 
@@ -92,7 +94,7 @@ const updateSavingsProductSchema = z.object({
  * GET /accounts
  * List all accounts for current member (or all accounts if admin)
  */
-accountRoutes.get('/', async (c) => {
+accountRoutes.get('/', enforcePermission('savings', 'read'), async (c) => {
     try {
         const { schema_name } = c.get('tenant')!;
         const currentUser = c.get('user');
@@ -127,6 +129,8 @@ accountRoutes.get('/products', async (c) => {
     try {
         const db = c.get('db')!;
         const activeOnly = c.req.query('active') === 'true';
+        const limit = Math.min(parseInt(c.req.query('limit') || '100', 10), 200);
+        const offset = Math.max(parseInt(c.req.query('offset') || '0', 10), 0);
 
         let query = db
             .selectFrom('savings_products')
@@ -137,7 +141,7 @@ accountRoutes.get('/products', async (c) => {
             query = query.where('is_active', '=', true);
         }
 
-        const products = await query.orderBy('name', 'asc').execute();
+        const products = await query.orderBy('name', 'asc').limit(limit).offset(offset).execute();
 
         return c.json({
             success: true,
@@ -331,7 +335,7 @@ accountRoutes.post('/', validate(createAccountSchema), async (c) => {
  * POST /accounts/deposit
  * Record a deposit
  */
-accountRoutes.post('/deposit', validate(depositSchema), async (c) => {
+accountRoutes.post('/deposit', rateLimit({ maxRequests: 30, windowSeconds: 60, keyPrefix: 'rl:deposit' }), validate(depositSchema), async (c) => {
     try {
         const data = getValidatedData<z.infer<typeof depositSchema>>(c);
         const { schema_name } = c.get('tenant')!;
@@ -345,30 +349,62 @@ accountRoutes.post('/deposit', validate(depositSchema), async (c) => {
             throw new NotFoundError('Account', data.savings_account_id);
         }
 
-        // Create deposit record
-        const depositNumber = savingsService.generateTransactionReference();
-        const deposit = await accountRepo.createDeposit({
-            savings_account_id: data.savings_account_id,
-            member_id: data.member_id,
-            deposit_number: depositNumber,
-            amount: String(data.amount),
-            deposit_date: new Date(),
-            payment_method: data.payment_method,
-            payment_reference: data.payment_reference || null,
-            status: 'posted',
-            description: data.description || null,
-            recorded_by: currentUser?.id || null,
-        } as any);
+        // Validate that the member_id matches the account owner (prevent IDOR)
+        if (account.member_id !== data.member_id) {
+            throw new ValidationError('Member ID does not match the account owner');
+        }
 
-        // Update account balance
-        const newBalance = Number(account.principal_balance) + data.amount;
-        const updatedAccount = await accountRepo.update(data.savings_account_id, {
-            principal_balance: String(newBalance),
-        } as any);
+        // Execute deposit atomically in a database transaction
+        const db = getTenantDb(schema_name);
+        const depositNumber = savingsService.generateTransactionReference();
+
+        const result = await db.transaction().execute(async (trx) => {
+            // Re-read balance inside transaction for consistency
+            const freshAccount = await trx
+                .selectFrom('savings_accounts')
+                .select(['id', 'principal_balance'])
+                .where('id', '=', data.savings_account_id)
+                .executeTakeFirstOrThrow();
+
+            // Create deposit record
+            const deposit = await trx
+                .insertInto('deposits')
+                .values({
+                    savings_account_id: data.savings_account_id,
+                    member_id: data.member_id,
+                    deposit_number: depositNumber,
+                    amount: String(data.amount) as any,
+                    deposit_date: new Date() as any,
+                    payment_method: data.payment_method as any,
+                    payment_reference: data.payment_reference || null,
+                    status: 'posted' as any,
+                    description: data.description || null,
+                    recorded_by: currentUser?.id || null,
+                } as any)
+                .returningAll()
+                .executeTakeFirstOrThrow();
+
+            // Update account balance using Decimal for precision
+            const currentBalance = new Decimal(freshAccount.principal_balance?.toString() ?? '0');
+            const depositAmount = new Decimal(data.amount);
+            const newBalance = currentBalance.plus(depositAmount);
+
+            const updatedAccount = await trx
+                .updateTable('savings_accounts')
+                .set({
+                    principal_balance: newBalance.toString() as any,
+                    updated_at: new Date() as any,
+                } as any)
+                .where('id', '=', data.savings_account_id)
+                .returningAll()
+                .executeTakeFirstOrThrow();
+
+            return { deposit, account: updatedAccount };
+        });
 
         return c.json({
             success: true,
-            data: { deposit, account: updatedAccount },
+            data: result,
             meta: { deposited: true }
         }, 201);
     } catch (error) {
@@ -388,14 +424,24 @@ accountRoutes.get('/:accountId/withdrawals', async (c) => {
     try {
         const { accountId } = c.req.param();
         const { schema_name } = c.get('tenant')!;
-        const accountRepo = new AccountRepository(schema_name);
+        const limit = Math.min(parseInt(c.req.query('limit') || '100', 10), 200);
+        const offset = Math.max(parseInt(c.req.query('offset') || '0', 10), 0);
+        const db = getTenantDb(schema_name);
 
-        const withdrawals = await accountRepo.findWithdrawalsByAccountId(accountId);
+        const withdrawals = await db
+            .selectFrom('withdrawals')
+            .selectAll()
+            .where('savings_account_id', '=', accountId)
+            .where('deleted_at', 'is', null)
+            .orderBy('created_at', 'desc')
+            .limit(limit)
+            .offset(offset)
+            .execute();
 
         return c.json({
             success: true,
             data: withdrawals,
-            meta: { count: withdrawals.length }
+            meta: { count: withdrawals.length, limit, offset }
         });
     } catch (error) {
         throw error;
@@ -406,7 +452,7 @@ accountRoutes.get('/:accountId/withdrawals', async (c) => {
  * POST /accounts/withdrawal
  * Request or record a withdrawal
  */
-accountRoutes.post('/withdrawal', validate(withdrawalSchema), async (c) => {
+accountRoutes.post('/withdrawal', rateLimit({ maxRequests: 20, windowSeconds: 60, keyPrefix: 'rl:withdrawal' }), validate(withdrawalSchema), async (c) => {
     try {
         const data = getValidatedData<z.infer<typeof withdrawalSchema>>(c);
         const { schema_name } = c.get('tenant')!;
@@ -420,14 +466,20 @@ accountRoutes.post('/withdrawal', validate(withdrawalSchema), async (c) => {
             throw new NotFoundError('Account', data.savings_account_id);
         }
 
+        // Validate that the member_id matches the account owner (prevent IDOR)
+        if (account.member_id !== data.member_id) {
+            throw new ValidationError('Member ID does not match the account owner');
+        }
+
         // Authorization: member can only withdraw from own account
         if (currentUser?.role === 'member' && account.member_id !== currentUser.id) {
             throw new UnauthorizedError('Cannot withdraw from other members\' accounts');
         }
 
         // Validate sufficient balance
-        const currentBalance = Number(account.principal_balance);
-        if (data.amount > currentBalance) {
+        const currentBalance = new Decimal(account.principal_balance?.toString() ?? '0');
+        const withdrawalAmount = new Decimal(data.amount);
+        if (withdrawalAmount.gt(currentBalance)) {
             return c.json({
                 success: false,
                 error: { code: 'INSUFFICIENT_FUNDS', message: 'Insufficient balance' }
@@ -438,26 +490,58 @@ accountRoutes.post('/withdrawal', validate(withdrawalSchema), async (c) => {
         const requiresApproval = savingsService.requiresWithdrawalApproval(data.amount);
 
         const withdrawalNumber = savingsService.generateTransactionReference();
-        const withdrawal = await accountRepo.createWithdrawal({
-            savings_account_id: data.savings_account_id,
-            member_id: data.member_id,
-            withdrawal_number: withdrawalNumber,
-            amount: String(data.amount),
-            withdrawal_date: new Date(),
-            payout_method: data.payout_method,
-            payout_reference: data.payout_reference || null,
-            payout_account: data.payout_account || null,
-            status: requiresApproval ? 'pending' : 'completed',
-            description: data.description || null,
-            requested_by: currentUser?.id || null,
-        } as any);
 
-        // If no approval required, update balance immediately
-        if (!requiresApproval) {
-            await accountRepo.update(data.savings_account_id, {
-                principal_balance: String(currentBalance - data.amount),
-            } as any);
-        }
+        // Execute withdrawal atomically in a database transaction
+        const db = getTenantDb(schema_name);
+        const withdrawal = await db.transaction().execute(async (trx) => {
+            // Re-read balance inside transaction for consistency
+            const freshAccount = await trx
+                .selectFrom('savings_accounts')
+                .select(['id', 'principal_balance'])
+                .where('id', '=', data.savings_account_id)
+                .executeTakeFirstOrThrow();
+
+            const freshBalance = new Decimal(freshAccount.principal_balance?.toString() ?? '0');
+            const amount = new Decimal(data.amount);
+
+            if (amount.gt(freshBalance)) {
+                throw new ValidationError('Insufficient balance');
+            }
+
+            // Create withdrawal record
+            const w = await trx
+                .insertInto('withdrawals')
+                .values({
+                    savings_account_id: data.savings_account_id,
+                    member_id: data.member_id,
+                    withdrawal_number: withdrawalNumber,
+                    amount: String(data.amount) as any,
+                    withdrawal_date: new Date() as any,
+                    payout_method: data.payout_method as any,
+                    payout_reference: data.payout_reference || null,
+                    payout_account: data.payout_account || null,
+                    status: (requiresApproval ? 'pending' : 'completed') as any,
+                    description: data.description || null,
+                    requested_by: currentUser?.id || null,
+                } as any)
+                .returningAll()
+                .executeTakeFirstOrThrow();
+
+            // If no approval required, update balance immediately
+            if (!requiresApproval) {
+                const newBalance = freshBalance.minus(amount);
+                await trx
+                    .updateTable('savings_accounts')
+                    .set({
+                        principal_balance: newBalance.toString() as any,
+                        updated_at: new Date() as any,
+                    } as any)
+                    .where('id', '=', data.savings_account_id)
+                    .execute();
+            }
+
+            return w;
+        });
 
         return c.json({
             success: true,
@@ -500,25 +584,53 @@ accountRoutes.patch('/withdrawals/:withdrawalId/approve', async (c) => {
             }, 400);
         }
 
-        // Approve withdrawal
-        const updated = await accountRepo.updateWithdrawal(withdrawalId, {
-            status: 'approved',
-            approved_by: user.id,
-            approved_at: new Date(),
-        } as any);
+        // Approve withdrawal atomically: check balance BEFORE setting status
+        const db = getTenantDb(schema_name);
+        const result = await db.transaction().execute(async (trx) => {
+            // Lock and read account balance inside transaction
+            const account = await trx
+                .selectFrom('savings_accounts')
+                .selectAll()
+                .where('id', '=', withdrawal.savings_account_id)
+                .executeTakeFirstOrThrow();
 
-        // Update account balance
-        const account = await accountRepo.findById(withdrawal.savings_account_id);
-        if (account) {
-            const newBalance = Number(account.principal_balance) - Number(withdrawal.amount);
-            await accountRepo.update(withdrawal.savings_account_id, {
-                principal_balance: String(newBalance),
-            } as any);
-        }
+            const currentBalance = new Decimal(account.principal_balance?.toString() ?? '0');
+            const withdrawalAmount = new Decimal(withdrawal.amount?.toString() ?? '0');
+
+            if (withdrawalAmount.gt(currentBalance)) {
+                throw new ValidationError(
+                    `Insufficient balance. Available: ${currentBalance.toFixed(2)}, Withdrawal: ${withdrawalAmount.toFixed(2)}`
+                );
+            }
+
+            // Deduct balance and approve atomically
+            const newBalance = currentBalance.minus(withdrawalAmount);
+            await trx
+                .updateTable('savings_accounts')
+                .set({
+                    principal_balance: newBalance.toString() as any,
+                    updated_at: new Date() as any,
+                } as any)
+                .where('id', '=', withdrawal.savings_account_id)
+                .execute();
+
+            const updated = await trx
+                .updateTable('withdrawals')
+                .set({
+                    status: 'approved' as any,
+                    approved_by: user.id,
+                    approved_at: new Date() as any,
+                } as any)
+                .where('id', '=', withdrawalId)
+                .returningAll()
+                .executeTakeFirstOrThrow();
+
+            return updated;
+        });
 
         return c.json({
             success: true,
-            data: updated,
+            data: result,
             meta: { approved: true }
         });
     } catch (error) {
@@ -526,14 +638,18 @@ accountRoutes.patch('/withdrawals/:withdrawalId/approve', async (c) => {
     }
 });
 
+const rejectWithdrawalSchema = z.object({
+    rejection_reason: z.string().min(1, 'Rejection reason is required').max(500),
+});
+
 /**
  * PATCH /accounts/withdrawals/:withdrawalId/reject
  * Reject a pending withdrawal
  */
-accountRoutes.patch('/withdrawals/:withdrawalId/reject', async (c) => {
+accountRoutes.patch('/withdrawals/:withdrawalId/reject', validate(rejectWithdrawalSchema), async (c) => {
     try {
         const { withdrawalId } = c.req.param();
-        const body = await c.req.json();
+        const data = getValidatedData<z.infer<typeof rejectWithdrawalSchema>>(c);
         const { schema_name } = c.get('tenant')!;
         const user = c.get('user');
 
@@ -548,8 +664,16 @@ accountRoutes.patch('/withdrawals/:withdrawalId/reject', async (c) => {
             throw new NotFoundError('Withdrawal', withdrawalId);
         }
 
+        if (withdrawal.status !== 'pending') {
+            return c.json({
+                success: false,
+                error: { code: 'INVALID_STATUS', message: 'Only pending withdrawals can be rejected' }
+            }, 400);
+        }
+
         const updated = await accountRepo.updateWithdrawal(withdrawalId, {
             status: 'rejected',
+            rejection_reason: data.rejection_reason,
         } as any);
 
         return c.json({
@@ -570,7 +694,7 @@ accountRoutes.patch('/withdrawals/:withdrawalId/reject', async (c) => {
  * POST /accounts/transfer
  * Transfer funds between accounts
  */
-accountRoutes.post('/transfer', validate(transferSchema), async (c) => {
+accountRoutes.post('/transfer', rateLimit({ maxRequests: 20, windowSeconds: 60, keyPrefix: 'rl:transfer' }), validate(transferSchema), async (c) => {
     try {
         const data = getValidatedData<z.infer<typeof transferSchema>>(c);
         const { schema_name } = c.get('tenant')!;
@@ -586,14 +710,23 @@ accountRoutes.post('/transfer', validate(transferSchema), async (c) => {
             throw new NotFoundError('Account', 'One or both accounts not found');
         }
 
+        // Prevent self-transfers (could create money due to non-atomic read/write)
+        if (data.from_account_id === data.to_account_id) {
+            return c.json({
+                success: false,
+                error: { code: 'INVALID_TRANSFER', message: 'Cannot transfer to the same account' }
+            }, 400);
+        }
+
         // Authorization
         if (currentUser?.role === 'member' && fromAccount.member_id !== currentUser.id) {
             throw new UnauthorizedError('Cannot transfer from other members\' accounts');
         }
 
-        // Validate sufficient balance
-        const fromBalance = Number(fromAccount.principal_balance);
-        if (fromBalance < data.amount) {
+        // Validate sufficient balance using Decimal
+        const fromBalance = new Decimal(fromAccount.principal_balance?.toString() ?? '0');
+        const transferAmount = new Decimal(data.amount);
+        if (fromBalance.lt(transferAmount)) {
             return c.json({
                 success: false,
                 error: { code: 'INSUFFICIENT_FUNDS', message: 'Insufficient balance' }
@@ -602,27 +735,64 @@ accountRoutes.post('/transfer', validate(transferSchema), async (c) => {
 
         const transferNumber = savingsService.generateTransactionReference();
 
-        // Create transfer record
-        const transfer = await accountRepo.createTransfer({
-            from_account_id: data.from_account_id,
-            to_account_id: data.to_account_id,
-            transfer_number: transferNumber,
-            amount: String(data.amount),
-            transfer_date: new Date(),
-            status: 'posted',
-            description: data.description || null,
-            initiated_by: currentUser?.id || null,
-        } as any);
+        // Execute transfer atomically in a database transaction
+        const db = getTenantDb(schema_name);
+        const transfer = await db.transaction().execute(async (trx) => {
+            // Re-read balances inside transaction for consistency
+            const freshFrom = await trx
+                .selectFrom('savings_accounts')
+                .select(['id', 'principal_balance'])
+                .where('id', '=', data.from_account_id)
+                .executeTakeFirstOrThrow();
 
-        // Update both account balances
-        const toBalance = Number(toAccount.principal_balance);
-        await accountRepo.update(data.from_account_id, {
-            principal_balance: String(fromBalance - data.amount),
-        } as any);
+            const freshTo = await trx
+                .selectFrom('savings_accounts')
+                .select(['id', 'principal_balance'])
+                .where('id', '=', data.to_account_id)
+                .executeTakeFirstOrThrow();
 
-        await accountRepo.update(data.to_account_id, {
-            principal_balance: String(toBalance + data.amount),
-        } as any);
+            const freshFromBalance = new Decimal(freshFrom.principal_balance?.toString() ?? '0');
+            const freshToBalance = new Decimal(freshTo.principal_balance?.toString() ?? '0');
+
+            if (freshFromBalance.lt(transferAmount)) {
+                throw new ValidationError('Insufficient balance');
+            }
+
+            // Create transfer record
+            const txfr = await (trx as any)
+                .insertInto('transfers')
+                .values({
+                    from_account_id: data.from_account_id,
+                    to_account_id: data.to_account_id,
+                    transfer_number: transferNumber,
+                    amount: String(data.amount),
+                    transfer_date: new Date(),
+                    status: 'posted',
+                    description: data.description || null,
+                    initiated_by: currentUser?.id || null,
+                } as any)
+                .returningAll()
+                .executeTakeFirstOrThrow();
+
+            // Update both account balances atomically
+            await trx
+                .updateTable('savings_accounts')
+                .set({
+                    principal_balance: freshFromBalance.minus(transferAmount).toString() as any,
+                } as any)
+                .where('id', '=', data.from_account_id)
+                .execute();
+
+            await trx
+                .updateTable('savings_accounts')
+                .set({
+                    principal_balance: freshToBalance.plus(transferAmount).toString() as any,
+                } as any)
+                .where('id', '=', data.to_account_id)
+                .execute();
+
+            return txfr;
+        });
 
         return c.json({
             success: true,
@@ -658,6 +828,44 @@ accountRoutes.patch('/:accountId/close', validate(closeAccountSchema), async (c)
         // Authorization
         if (currentUser?.role === 'member' && account.member_id !== currentUser.id) {
             throw new UnauthorizedError('Cannot close other members\' accounts');
+        }
+
+        // Validate account can be closed
+        const balance = new Decimal(account.principal_balance?.toString() ?? '0');
+        if (!balance.isZero()) {
+            throw new ValidationError(
+                `Cannot close account with non-zero balance (${balance.toFixed(2)}). Withdraw or transfer funds first.`
+            );
+        }
+
+        // Check for active liens
+        const db = getTenantDb(schema_name);
+        const activeLiens = await db
+            .selectFrom('account_liens')
+            .select(db.fn.countAll().as('count'))
+            .where('account_id', '=', accountId)
+            .where('status', '=', 'active')
+            .executeTakeFirst();
+
+        if (activeLiens && Number(activeLiens.count) > 0) {
+            throw new ValidationError(
+                `Cannot close account with ${activeLiens.count} active lien(s). Release all liens first.`
+            );
+        }
+
+        // Check for active standing instructions
+        const activeSIs = await db
+            .selectFrom('standing_instructions')
+            .select(db.fn.countAll().as('count'))
+            .where('source_account_id', '=', accountId)
+            .where('status', '=', 'active')
+            .where('deleted_at', 'is', null)
+            .executeTakeFirst();
+
+        if (activeSIs && Number(activeSIs.count) > 0) {
+            throw new ValidationError(
+                `Cannot close account with ${activeSIs.count} active standing instruction(s). Cancel them first.`
+            );
         }
 
         const closedAccount = await accountRepo.update(accountId, {
@@ -700,8 +908,8 @@ accountRoutes.get('/:accountId/deposits', async (c) => {
 
         return c.json({
             success: true,
-            data: deposits,
-            meta: { count: deposits.length }
+            data: deposits.slice(0, 200),
+            meta: { count: Math.min(deposits.length, 200), total: deposits.length }
         });
     } catch (error) {
         throw error;
@@ -748,7 +956,7 @@ accountRoutes.get('/:accountId/transfers', async (c) => {
  * POST /accounts/batch-deposit
  * Process multiple deposits in a single request (payroll, bulk)
  */
-accountRoutes.post('/batch-deposit', validate(batchDepositSchema), async (c) => {
+accountRoutes.post('/batch-deposit', rateLimit({ maxRequests: 5, windowSeconds: 60, keyPrefix: 'rl:batch-deposit' }), validate(batchDepositSchema), async (c) => {
     try {
         const data = getValidatedData<z.infer<typeof batchDepositSchema>>(c);
         const { schema_name } = c.get('tenant')!;
@@ -763,45 +971,73 @@ accountRoutes.post('/batch-deposit', validate(batchDepositSchema), async (c) => 
         const results: Array<{ depositNumber: string; accountId: string; amount: number; status: string }> = [];
         const errors: Array<{ index: number; accountId: string; error: string }> = [];
 
-        for (let i = 0; i < data.deposits.length; i++) {
-            const item = data.deposits[i];
-            try {
-                const account = await accountRepo.findById(item.savings_account_id);
-                if (!account) {
-                    errors.push({ index: i, accountId: item.savings_account_id, error: 'Account not found' });
-                    continue;
+        // Process batch deposits atomically using Kysely transaction
+        const db = getTenantDb(schema_name);
+
+        await db.transaction().execute(async (trx) => {
+            for (let i = 0; i < data.deposits.length; i++) {
+                const item = data.deposits[i];
+                try {
+                    // Read account inside transaction for consistency
+                    const account = await trx
+                        .selectFrom('savings_accounts')
+                        .selectAll()
+                        .where('id', '=', item.savings_account_id)
+                        .where('deleted_at', 'is', null)
+                        .executeTakeFirst();
+
+                    if (!account) {
+                        errors.push({ index: i, accountId: item.savings_account_id, error: 'Account not found' });
+                        continue;
+                    }
+
+                    const depositNumber = savingsService.generateTransactionReference();
+                    await trx
+                        .insertInto('deposits')
+                        .values({
+                            savings_account_id: item.savings_account_id,
+                            member_id: item.member_id,
+                            deposit_number: depositNumber,
+                            amount: String(item.amount) as any,
+                            deposit_date: new Date() as any,
+                            payment_method: item.payment_method as any,
+                            payment_reference: item.payment_reference || null,
+                            status: 'posted' as any,
+                            description: item.description || 'Batch deposit',
+                            recorded_by: currentUser.id,
+                        } as any)
+                        .execute();
+
+                    const currentBalance = new Decimal(account.principal_balance?.toString() ?? '0');
+                    const depositAmount = new Decimal(item.amount);
+                    const newBalance = currentBalance.plus(depositAmount);
+
+                    await trx
+                        .updateTable('savings_accounts')
+                        .set({
+                            principal_balance: newBalance.toString() as any,
+                            updated_at: new Date() as any,
+                        } as any)
+                        .where('id', '=', item.savings_account_id)
+                        .execute();
+
+                    results.push({
+                        depositNumber,
+                        accountId: item.savings_account_id,
+                        amount: item.amount,
+                        status: 'posted',
+                    });
+                } catch (error) {
+                    const errMsg = error instanceof Error ? error.message : 'Unknown error';
+                    errors.push({ index: i, accountId: item.savings_account_id, error: errMsg });
                 }
-
-                const depositNumber = savingsService.generateTransactionReference();
-                const deposit = await accountRepo.createDeposit({
-                    savings_account_id: item.savings_account_id,
-                    member_id: item.member_id,
-                    deposit_number: depositNumber,
-                    amount: String(item.amount),
-                    deposit_date: new Date(),
-                    payment_method: item.payment_method,
-                    payment_reference: item.payment_reference || null,
-                    status: 'posted',
-                    description: item.description || 'Batch deposit',
-                    recorded_by: currentUser.id,
-                } as any);
-
-                const newBalance = Number(account.principal_balance) + item.amount;
-                await accountRepo.update(item.savings_account_id, {
-                    principal_balance: String(newBalance),
-                } as any);
-
-                results.push({
-                    depositNumber,
-                    accountId: item.savings_account_id,
-                    amount: item.amount,
-                    status: 'posted',
-                });
-            } catch (error) {
-                const errMsg = error instanceof Error ? error.message : 'Unknown error';
-                errors.push({ index: i, accountId: item.savings_account_id, error: errMsg });
             }
-        }
+
+            // If no deposits succeeded, throw to trigger rollback
+            if (results.length === 0 && errors.length > 0) {
+                throw new ValidationError('All deposits in batch failed');
+            }
+        });
 
         const totalDeposited = results.reduce((sum, r) => sum + r.amount, 0);
 
@@ -828,7 +1064,14 @@ accountRoutes.post('/batch-deposit', validate(batchDepositSchema), async (c) => 
  * POST /accounts/:accountId/post-interest
  * Post accrued interest to an account balance
  */
-accountRoutes.post('/:accountId/post-interest', async (c) => {
+const interestPostRateLimit = rateLimit({
+    maxRequests: 5,
+    windowSeconds: 60,
+    keyPrefix: 'rl:post-interest',
+    message: 'Too many interest posting requests. Please try again later.',
+});
+
+accountRoutes.post('/:accountId/post-interest', interestPostRateLimit, async (c) => {
     try {
         const { accountId } = c.req.param();
         const user = c.get('user');
@@ -929,9 +1172,21 @@ accountRoutes.get('/:accountId/statement', async (c) => {
         const startDate = c.req.query('start_date');
         const endDate = c.req.query('end_date');
 
+        // Validate date parameters
+        if (startDate && isNaN(Date.parse(startDate))) {
+            throw new ValidationError('Invalid start_date format. Use ISO 8601 (e.g., 2025-01-01)');
+        }
+        if (endDate && isNaN(Date.parse(endDate))) {
+            throw new ValidationError('Invalid end_date format. Use ISO 8601 (e.g., 2025-12-31)');
+        }
+
         // Build date range query
         const from = startDate ? new Date(startDate) : new Date(new Date().getFullYear(), 0, 1);
         const to = endDate ? new Date(endDate) : new Date();
+
+        if (from > to) {
+            throw new ValidationError('start_date must be before end_date');
+        }
 
         // Get deposits in range
         const deposits = await db
@@ -1182,6 +1437,11 @@ accountRoutes.post('/standing-instructions', enforcePermission('savings', 'creat
         const sourceAccount = await accountRepo.findById(data.source_account_id);
         if (!sourceAccount) {
             throw new NotFoundError('Account', data.source_account_id);
+        }
+
+        // V-15: Verify source account belongs to the specified member
+        if (sourceAccount.member_id !== data.member_id) {
+            throw new ValidationError('Source account does not belong to the specified member');
         }
 
         // Verify destination account if provided

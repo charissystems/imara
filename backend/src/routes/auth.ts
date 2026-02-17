@@ -15,16 +15,28 @@ import { PasswordResetService } from '../services/passwordResetService';
 import { TwoFactorService } from '../services/twoFactorService';
 import { getTenantDb } from '../config/database';
 import { appLogger } from '../middleware/logger';
+import { blacklistToken } from '../services/tokenBlacklistService';
+import { loginRateLimit, registerRateLimit, passwordResetRateLimit, otpRateLimit, rateLimit } from '../middleware/rateLimiter';
+import { enforcePermission } from '../middleware/rbac';
 
 export const authRoutes = new Hono<Env>();
+
+/** Rate limiter for token refresh: 10 per 60s */
+const refreshRateLimit = rateLimit({
+    maxRequests: 10,
+    windowSeconds: 60,
+    keyPrefix: 'rl:refresh',
+    message: 'Too many refresh attempts. Please try again in 1 minute.',
+});
 
 // Password validation regex: at least one uppercase, one lowercase, and one number
 const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).+$/;
 
 const passwordSchema = z.string()
-    .min(8, 'Password must be at least 8 characters')
+    .min(12, 'Password must be at least 12 characters')
     .max(128, 'Password must be at most 128 characters')
-    .regex(passwordRegex, 'Password must contain at least one uppercase letter, one lowercase letter, and one number');
+    .regex(passwordRegex, 'Password must contain at least one uppercase letter, one lowercase letter, and one number')
+    .refine(pw => /[!@#$%^&*(),.?":{}|<>]/.test(pw), 'Password must contain at least one special character');
 
 // Validation schemas
 const registerSchema = z.object({
@@ -72,7 +84,7 @@ const forgotPasswordSchema = z.object({
  * POST /auth/login
  * Authenticate a staff member and return JWT tokens
  */
-authRoutes.post('/login', validate(loginSchema), async (c) => {
+authRoutes.post('/login', loginRateLimit, validate(loginSchema), async (c) => {
     try {
         const data = getValidatedData<z.infer<typeof loginSchema>>(c);
         const { schema_name, code: tenantCode } = c.get('tenant')!;
@@ -133,8 +145,8 @@ authRoutes.post('/login', validate(loginSchema), async (c) => {
 
         // Check if 2FA is enabled
         if (credentials.two_factor_enabled) {
-            // Return a partial response that requires 2FA verification
-            const tempToken = await authService.generateAccessToken(staff);
+            // Return a limited-scope token that can ONLY be used at /auth/2fa/verify
+            const tempToken = await authService.generate2faPendingToken(staff, c.get('tenant')!.id);
             return c.json({
                 success: true,
                 data: {
@@ -152,9 +164,11 @@ authRoutes.post('/login', validate(loginSchema), async (c) => {
             });
         }
 
-        // Generate tokens
-        const accessToken = await authService.generateAccessToken(staff);
-        const refreshToken = await authService.generateRefreshToken(staff);
+        // Generate tokens with role and tenantId
+        const staffRole = (staff as any).role || 'staff';
+        const tenantId = c.get('tenant')!.id;
+        const accessToken = await authService.generateAccessToken(staff, staffRole, tenantId);
+        const refreshToken = await authService.generateRefreshToken(staff, tenantId);
 
         return c.json({
             success: true,
@@ -170,7 +184,7 @@ authRoutes.post('/login', validate(loginSchema), async (c) => {
                 },
             },
             meta: {
-                tokenExpiresIn: `${authService.getTokenExpirationHours()}h`,
+                tokenExpiresIn: `${authService.getTokenExpirationMinutes()}m`,
                 tenant: tenantCode,
             },
         });
@@ -183,7 +197,7 @@ authRoutes.post('/login', validate(loginSchema), async (c) => {
  * POST /auth/register
  * Register a new staff member (typically admin only)
  */
-authRoutes.post('/register', validate(registerSchema), async (c) => {
+authRoutes.post('/register', enforcePermission('staff', 'create'), registerRateLimit, validate(registerSchema), async (c) => {
     try {
         const data = getValidatedData<z.infer<typeof registerSchema>>(c);
         const { schema_name, code: tenantCode } = c.get('tenant')!;
@@ -295,7 +309,7 @@ authRoutes.get('/me', async (c) => {
  * POST /auth/refresh
  * Refresh access token using refresh token
  */
-authRoutes.post('/refresh', async (c) => {
+authRoutes.post('/refresh', refreshRateLimit, async (c) => {
     try {
         const bearerToken = c.req.header('Authorization');
         if (!bearerToken || !bearerToken.startsWith('Bearer ')) {
@@ -305,8 +319,8 @@ authRoutes.post('/refresh', async (c) => {
         const refreshToken = bearerToken.substring(7);
         const authService = new AuthService();
 
-        // Verify refresh token
-        const payload = await authService.verifyToken(refreshToken);
+        // Verify refresh token using the dedicated refresh secret
+        const payload = await authService.verifyRefreshToken(refreshToken);
         if (!payload) {
             throw new UnauthorizedError('Invalid or expired refresh token');
         }
@@ -320,8 +334,10 @@ authRoutes.post('/refresh', async (c) => {
             throw new NotFoundError('Staff', payload.staffId);
         }
 
-        // Generate new access token
-        const newAccessToken = await authService.generateAccessToken(staff);
+        // Generate new access token with role and tenantId from previous token
+        const staffRole = (staff as any).role || payload.role || 'staff';
+        const tenantId = payload.tenantId || c.get('tenant')!.id;
+        const newAccessToken = await authService.generateAccessToken(staff, staffRole, tenantId);
 
         return c.json({
             success: true,
@@ -329,7 +345,7 @@ authRoutes.post('/refresh', async (c) => {
                 accessToken: newAccessToken,
             },
             meta: {
-                tokenExpiresIn: `${authService.getTokenExpirationHours()}h`,
+                tokenExpiresIn: `${authService.getTokenExpirationMinutes()}m`,
             },
         });
     } catch (error) {
@@ -339,7 +355,7 @@ authRoutes.post('/refresh', async (c) => {
 
 /**
  * POST /auth/logout
- * Logout user (token blacklist implementation recommended)
+ * Logout user — blacklists the current token so it cannot be reused
  */
 authRoutes.post('/logout', async (c) => {
     try {
@@ -349,8 +365,16 @@ authRoutes.post('/logout', async (c) => {
             throw new UnauthorizedError('Not authenticated');
         }
 
-        // Note: Token blacklist would be implemented here
-        // For now, logout is client-side (discard token)
+        // Extract token and its expiration, then add to blacklist
+        const authHeader = c.req.header('Authorization');
+        if (authHeader && authHeader.startsWith('Bearer ')) {
+            const token = authHeader.substring(7);
+            const authService = new AuthService();
+            const payload = await authService.verifyToken(token);
+            if (payload?.exp) {
+                await blacklistToken(token, payload.exp);
+            }
+        }
 
         return c.json({
             success: true,
@@ -421,7 +445,7 @@ authRoutes.post(
  * POST /auth/forgot-password
  * Request a password reset link (sent via email)
  */
-authRoutes.post('/forgot-password', validate(forgotPasswordSchema), async (c) => {
+authRoutes.post('/forgot-password', passwordResetRateLimit, validate(forgotPasswordSchema), async (c) => {
     try {
         const data = getValidatedData<z.infer<typeof forgotPasswordSchema>>(c);
         const { schema_name, sacco_name } = c.get('tenant')!;
@@ -445,7 +469,7 @@ authRoutes.post('/forgot-password', validate(forgotPasswordSchema), async (c) =>
  * POST /auth/reset-password
  * Reset password using a valid reset token
  */
-authRoutes.post('/reset-password', validate(resetPasswordSchema), async (c) => {
+authRoutes.post('/reset-password', passwordResetRateLimit, validate(resetPasswordSchema), async (c) => {
     try {
         const data = getValidatedData<z.infer<typeof resetPasswordSchema>>(c);
         const { schema_name } = c.get('tenant')!;
@@ -500,23 +524,31 @@ const regenerateBackupCodesSchema = z.object({
  * POST /auth/2fa/verify
  * Verify 2FA code during login flow
  */
-authRoutes.post('/2fa/verify', validate(verify2faSchema), async (c) => {
+authRoutes.post('/2fa/verify', otpRateLimit, validate(verify2faSchema), async (c) => {
     try {
         const data = getValidatedData<z.infer<typeof verify2faSchema>>(c);
         const { schema_name, code: tenantCode } = c.get('tenant')!;
 
         // Decrypt the temp token to get staff info
-        const secret = process.env.JWT_SECRET || 'your_jwt_secret_key_change_in_production_12345';
+        const secret = process.env.JWT_SECRET;
+        if (!secret) {
+            throw new UnauthorizedError('Authentication service is misconfigured');
+        }
         const payload = await verify(data.tempToken, secret, 'HS256');
 
-        if (!payload || !payload.id) {
+        if (!payload || !payload.staffId) {
             throw new UnauthorizedError('Invalid temporary token');
+        }
+
+        // Ensure this is a 2FA pending token, not a regular access token
+        if (payload.type !== '2fa_pending') {
+            throw new UnauthorizedError('Invalid token type: expected 2FA pending token');
         }
 
         const twoFactorDb = getTenantDb(schema_name);
         const twoFactorService = new TwoFactorService(twoFactorDb);
 
-        const verifyResult = await twoFactorService.verify(payload.id as string, data.code);
+        const verifyResult = await twoFactorService.verify(payload.staffId as string, data.code);
 
         if (!verifyResult.valid) {
             return c.json({
@@ -528,17 +560,19 @@ authRoutes.post('/2fa/verify', validate(verify2faSchema), async (c) => {
             }, 401);
         }
 
-        // 2FA verified — generate full tokens
+        // 2FA verified — generate full tokens with role and tenantId
         const staffRepo = new StaffRepository(schema_name);
         const authService = new AuthService();
-        const staff = await staffRepo.findById(payload.id as string);
+        const staff = await staffRepo.findById(payload.staffId as string);
 
         if (!staff) {
             throw new UnauthorizedError('Staff not found');
         }
 
-        const accessToken = await authService.generateAccessToken(staff);
-        const refreshToken = await authService.generateRefreshToken(staff);
+        const staffRole = (staff as any).role || 'staff';
+        const tenantId = (payload.tenantId as string) || c.get('tenant')!.id;
+        const accessToken = await authService.generateAccessToken(staff, staffRole, tenantId);
+        const refreshToken = await authService.generateRefreshToken(staff, tenantId);
 
         return c.json({
             success: true,
@@ -555,7 +589,7 @@ authRoutes.post('/2fa/verify', validate(verify2faSchema), async (c) => {
                 usedBackupCode: verifyResult.usedBackupCode,
             },
             meta: {
-                tokenExpiresIn: `${authService.getTokenExpirationHours()}h`,
+                tokenExpiresIn: `${authService.getTokenExpirationMinutes()}m`,
                 tenant: tenantCode,
             },
         });
@@ -584,7 +618,6 @@ authRoutes.post('/2fa/setup', async (c) => {
             success: true,
             data: {
                 qrCodeDataUrl: setup.qrCodeDataUrl,
-                secret: setup.secret,
                 backupCodes: setup.backupCodes,
             },
             meta: {

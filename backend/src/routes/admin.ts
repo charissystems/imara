@@ -149,20 +149,37 @@ app.post('/staff', validate(createStaffSchema), async (c) => {
 });
 
 /**
+ * Zod schema for staff updates — validates type, length, and format of each field
+ */
+const updateStaffSchema = z.object({
+    first_name: z.string().min(1).max(100).optional(),
+    last_name: z.string().min(1).max(100).optional(),
+    phone: z.string().regex(/^\+?[1-9]\d{1,14}$/, 'Invalid phone number').optional(),
+    position: z.string().min(1).max(100).optional(),
+    department: z.string().min(1).max(100).optional(),
+    status: z.enum(['active', 'inactive', 'suspended']).optional(),
+    hire_date: z.string().refine((val) => !isNaN(Date.parse(val)), 'Invalid date').optional(),
+});
+
+/**
  * PATCH /admin/staff/:id
  * Update staff details
  */
-app.patch('/staff/:id', async (c) => {
+app.patch('/staff/:id', enforcePermission('staff', 'update'), validate(updateStaffSchema), async (c) => {
     const db = c.get('db')!;
     const id = c.req.param('id');
-    const body = await c.req.json();
+    const data = getValidatedData<z.infer<typeof updateStaffSchema>>(c);
 
-    // Ensure we are only updating staff belonging to this tenant
-    // (Implicitly guaranteed because 'db' only connects to this tenant)
+    const sanitized: Record<string, any> = { updated_at: new Date() };
+    for (const [key, value] of Object.entries(data)) {
+        if (value !== undefined) {
+            sanitized[key] = value;
+        }
+    }
 
     const updated = await db
         .updateTable('staff')
-        .set({ ...body, updated_at: new Date() })
+        .set(sanitized)
         .where('id', '=', id)
         .returningAll()
         .executeTakeFirst();

@@ -1,6 +1,7 @@
 // src/routes/messaging.ts
 import { Hono } from 'hono';
 import { z } from 'zod';
+import crypto from 'crypto';
 import { Env } from '../middleware/types';
 import { validate, getValidatedData, commonSchemas } from '../middleware/validation';
 import { enforcePermission } from '../middleware/rbac';
@@ -1050,11 +1051,38 @@ messagingRoutes.get('/members/:memberId/messages', enforcePermission('messaging'
  */
 messagingRoutes.post('/webhooks/delivery-status', async (c) => {
     try {
-        const body = await c.req.json().catch(() => ({}));
+        // Verify webhook signature (HMAC-SHA256)
+        const webhookSecret = process.env.WEBHOOK_SIGNING_SECRET;
+        if (!webhookSecret) {
+            return c.json({ success: false, error: 'Webhook verification not configured' }, 500);
+        }
+
+        const rawBody = await c.req.text();
+        const signatureHeader = c.req.header('X-Webhook-Signature') || '';
+
+        const expectedSignature = crypto
+            .createHmac('sha256', webhookSecret)
+            .update(rawBody)
+            .digest('hex');
+
+        // Timing-safe comparison to prevent timing attacks
+        const sigBuffer = Buffer.from(signatureHeader);
+        const expectedBuffer = Buffer.from(expectedSignature);
+        if (sigBuffer.length !== expectedBuffer.length || !crypto.timingSafeEqual(sigBuffer, expectedBuffer)) {
+            return c.json({ success: false, error: 'Invalid webhook signature' }, 401);
+        }
+
+        const body = JSON.parse(rawBody);
         const db = c.get('db');
 
         if (!body.message_id || !body.status) {
             return c.json({ success: false, error: 'Missing message_id or status' }, 400);
+        }
+
+        // Validate status against allowed values
+        const ALLOWED_STATUSES = ['sent', 'delivered', 'failed', 'bounced', 'rejected'];
+        if (!ALLOWED_STATUSES.includes(body.status)) {
+            return c.json({ success: false, error: `Invalid status. Allowed: ${ALLOWED_STATUSES.join(', ')}` }, 400);
         }
 
         if (db) {

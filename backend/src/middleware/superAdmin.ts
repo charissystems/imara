@@ -1,21 +1,37 @@
 // src/middleware/adminAuth.ts
 import { Context, Next } from 'hono';
+import { timingSafeEqual } from 'crypto';
 import { UnauthorizedError } from './errorHandler';
+import { appLogger } from './logger';
 
 /**
- * Simple middleware to protect admin routes.
- * TODO: Implement proper JWT or API Key validation here.
+ * Middleware to protect super-admin routes.
+ * Uses timing-safe comparison to prevent timing attacks on the secret.
  */
 export const requireSuperAdmin = async (c: Context, next: Next) => {
-    // Example: Check for a specific secret header
     const adminSecret = c.req.header('X-Admin-Secret');
-    
-    if (adminSecret !== process.env.ADMIN_SECRET_KEY) {
+    const expectedSecret = process.env.ADMIN_SECRET_KEY;
+
+    if (!adminSecret || !expectedSecret) {
+        appLogger.warn('Super admin access denied: missing credentials', {
+            path: c.req.path,
+            ip: c.req.header('x-forwarded-for') || c.req.header('x-real-ip'),
+        });
         throw new UnauthorizedError('Admin access required');
     }
 
-    // Set an admin user context if needed
-    // c.set('adminUser', { ... });
+    // Use timing-safe comparison to prevent timing attacks
+    const secretBuffer = Buffer.from(adminSecret);
+    const expectedBuffer = Buffer.from(expectedSecret);
+
+    if (secretBuffer.length !== expectedBuffer.length ||
+        !timingSafeEqual(secretBuffer, expectedBuffer)) {
+        appLogger.warn('Super admin access denied: invalid secret', {
+            path: c.req.path,
+            ip: c.req.header('x-forwarded-for') || c.req.header('x-real-ip'),
+        });
+        throw new UnauthorizedError('Admin access required');
+    }
 
     await next();
 };

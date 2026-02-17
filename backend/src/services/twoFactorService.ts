@@ -2,20 +2,21 @@
  * Two-Factor Authentication Service
  *
  * TOTP-based 2FA using authenticator apps (Google Authenticator, Authy, etc.).
- * Stores secrets encrypted in staff_credentials.two_factor_secret and
- * generates backup codes for recovery.
+ * Stores secrets encrypted (AES-256-GCM) in staff_credentials.two_factor_secret
+ * and hashes backup codes with bcrypt for recovery.
  *
  * Flow:
  *  1. Staff enables 2FA → secret generated, QR code returned
  *  2. Staff scans QR code in authenticator app
  *  3. Staff confirms setup by providing a valid TOTP code
  *  4. On login, if 2FA enabled, require TOTP code after password verification
- *  5. Backup codes can be used if authenticator is unavailable (single-use)
+ *  5. Backup codes can be used if authenticator is unavailable (single-use, hashed)
  */
 
 import { TOTP, Secret } from 'otpauth';
 import * as QRCode from 'qrcode';
-import { randomBytes } from 'crypto';
+import { randomBytes, createCipheriv, createDecipheriv, createHash } from 'crypto';
+import bcrypt from 'bcryptjs';
 import { Kysely } from 'kysely';
 import { TenantDatabase } from '../database/types';
 import { appLogger } from '../middleware/logger';
@@ -46,6 +47,52 @@ const TOTP_DIGITS = 6;
 const TOTP_ALGORITHM = 'SHA1';
 const BACKUP_CODE_COUNT = 10;
 const BACKUP_CODE_LENGTH = 8; // characters per code
+const ENCRYPTION_ALGORITHM = 'aes-256-gcm';
+const IV_LENGTH = 16;
+const AUTH_TAG_LENGTH = 16;
+
+// ────────────────────────────────────────────────────────────
+// Encryption helpers
+// ────────────────────────────────────────────────────────────
+
+function getEncryptionKey(): Buffer {
+    const keyEnv = process.env.TWO_FACTOR_ENCRYPTION_KEY || process.env.JWT_SECRET;
+    if (!keyEnv) {
+        throw new Error('TWO_FACTOR_ENCRYPTION_KEY or JWT_SECRET environment variable is required');
+    }
+    // Derive a 32-byte key from the env variable using SHA-256
+    return createHash('sha256').update(keyEnv).digest();
+}
+
+function encryptSecret(plaintext: string): string {
+    const key = getEncryptionKey();
+    const iv = randomBytes(IV_LENGTH);
+    const cipher = createCipheriv(ENCRYPTION_ALGORITHM, key, iv);
+    const encrypted = Buffer.concat([cipher.update(plaintext, 'utf8'), cipher.final()]);
+    const authTag = cipher.getAuthTag();
+    // Format: iv:authTag:ciphertext (all hex-encoded)
+    return `${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted.toString('hex')}`;
+}
+
+function decryptSecret(encryptedValue: string): string {
+    // Handle legacy plaintext secrets (not encrypted)
+    if (!encryptedValue.includes(':')) {
+        return encryptedValue;
+    }
+    const key = getEncryptionKey();
+    const parts = encryptedValue.split(':');
+    if (parts.length !== 3) {
+        // Assume legacy plaintext
+        return encryptedValue;
+    }
+    const iv = Buffer.from(parts[0], 'hex');
+    const authTag = Buffer.from(parts[1], 'hex');
+    const ciphertext = Buffer.from(parts[2], 'hex');
+    const decipher = createDecipheriv(ENCRYPTION_ALGORITHM, key, iv);
+    decipher.setAuthTag(authTag);
+    const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+    return decrypted.toString('utf8');
+}
 
 // ────────────────────────────────────────────────────────────
 // Two-Factor Service
@@ -103,12 +150,18 @@ export class TwoFactorService {
         // Generate backup codes
         const backupCodes = this.generateBackupCodes();
 
-        // Store secret and backup codes (not yet enabled)
+        // Hash backup codes before storage
+        const hashedBackupCodes = await this.hashBackupCodes(backupCodes);
+
+        // Encrypt secret before storage
+        const encryptedSecret = encryptSecret(secret.base32);
+
+        // Store encrypted secret and hashed backup codes (not yet enabled)
         await this.db
             .updateTable('staff_credentials')
             .set({
-                two_factor_secret: secret.base32,
-                two_factor_backup_codes: backupCodes as any,
+                two_factor_secret: encryptedSecret,
+                two_factor_backup_codes: hashedBackupCodes as any,
                 updated_at: new Date() as any,
             })
             .where('staff_id', '=', staffId)
@@ -143,8 +196,9 @@ export class TwoFactorService {
             throw new Error('2FA is already enabled for this account.');
         }
 
-        // Verify the TOTP code
-        const isValid = this.verifyTotp(credentials.two_factor_secret, totpCode);
+        // Decrypt secret and verify the TOTP code
+        const decryptedSecret = decryptSecret(credentials.two_factor_secret);
+        const isValid = this.verifyTotp(decryptedSecret, totpCode);
 
         if (!isValid) {
             appLogger.info('2FA setup confirmation failed — invalid code', { staffId });
@@ -212,20 +266,21 @@ export class TwoFactorService {
             return { valid: false };
         }
 
-        // Try TOTP first
-        const totpValid = this.verifyTotp(credentials.two_factor_secret, code);
+        // Decrypt secret and try TOTP first
+        const decryptedSecret = decryptSecret(credentials.two_factor_secret);
+        const totpValid = this.verifyTotp(decryptedSecret, code);
         if (totpValid) {
             return { valid: true, usedBackupCode: false };
         }
 
-        // Try backup codes
-        const backupCodes = credentials.two_factor_backup_codes ?? [];
-        const codeIndex = backupCodes.indexOf(code);
+        // Try backup codes (hashed comparison)
+        const storedCodes = credentials.two_factor_backup_codes ?? [];
+        const matchIndex = await this.findMatchingBackupCode(code, storedCodes);
 
-        if (codeIndex !== -1) {
+        if (matchIndex !== -1) {
             // Remove used backup code (single-use)
-            const updatedCodes = [...backupCodes];
-            updatedCodes.splice(codeIndex, 1);
+            const updatedCodes = [...storedCodes];
+            updatedCodes.splice(matchIndex, 1);
 
             await this.db
                 .updateTable('staff_credentials')
@@ -268,17 +323,19 @@ export class TwoFactorService {
             throw new Error('2FA is not enabled');
         }
 
-        // Verify TOTP before regenerating
-        if (!this.verifyTotp(credentials.two_factor_secret, totpCode)) {
+        // Decrypt secret and verify TOTP before regenerating
+        const decryptedSecret = decryptSecret(credentials.two_factor_secret);
+        if (!this.verifyTotp(decryptedSecret, totpCode)) {
             throw new Error('Invalid TOTP code');
         }
 
         const newCodes = this.generateBackupCodes();
+        const hashedCodes = await this.hashBackupCodes(newCodes);
 
         await this.db
             .updateTable('staff_credentials')
             .set({
-                two_factor_backup_codes: newCodes as any,
+                two_factor_backup_codes: hashedCodes as any,
                 updated_at: new Date() as any,
             })
             .where('staff_id', '=', staffId)
@@ -329,7 +386,7 @@ export class TwoFactorService {
     // ──────────────────────────────────────────────
 
     /**
-     * Verify a TOTP code against a secret.
+     * Verify a TOTP code against a (decrypted) secret.
      * Allows ±1 time-step window for clock drift.
      */
     private verifyTotp(secret: string, code: string): boolean {
@@ -364,6 +421,30 @@ export class TwoFactorService {
             );
         }
         return codes;
+    }
+
+    /**
+     * Hash backup codes individually with bcrypt for secure storage.
+     */
+    private async hashBackupCodes(codes: string[]): Promise<string[]> {
+        return Promise.all(codes.map(code => bcrypt.hash(code, 10)));
+    }
+
+    /**
+     * Find the index of a matching backup code by comparing against bcrypt hashes.
+     * Returns -1 if no match found.
+     */
+    private async findMatchingBackupCode(code: string, hashedCodes: string[]): Promise<number> {
+        for (let i = 0; i < hashedCodes.length; i++) {
+            // Handle legacy plaintext codes gracefully
+            if (!hashedCodes[i].startsWith('$2')) {
+                if (hashedCodes[i] === code) return i;
+                continue;
+            }
+            const match = await bcrypt.compare(code, hashedCodes[i]);
+            if (match) return i;
+        }
+        return -1;
     }
 
     /**

@@ -1,13 +1,14 @@
 import { Kysely } from 'kysely';
 import { TenantDatabase } from '../database/types';
-import { createHash, randomBytes } from 'crypto';
+import { randomBytes, randomInt, timingSafeEqual } from 'crypto';
+import bcrypt from 'bcryptjs';
 
 export class MemberCredentialService {
     constructor(private db: Kysely<TenantDatabase>) {}
 
     async setPin(memberId: string, pin: string, createdBy?: string) {
         const salt = randomBytes(16).toString('hex');
-        const pinHash = this.hashPin(pin, salt);
+        const pinHash = await this.hashPin(pin, salt);
 
         // Upsert: update if exists, insert if not
         const existing = await this.db
@@ -61,8 +62,8 @@ export class MemberCredentialService {
             return { valid: false, locked: true };
         }
 
-        const hash = this.hashPin(pin, cred.pin_salt);
-        if (hash === cred.pin_hash) {
+        const isValid = await this.verifyPinHash(pin, cred.pin_hash);
+        if (isValid) {
             // Reset attempts on success
             await this.db
                 .updateTable('member_credentials')
@@ -91,9 +92,9 @@ export class MemberCredentialService {
     }
 
     async resetPin(memberId: string, resetBy: string): Promise<{ temporary_pin: string }> {
-        const tempPin = String(Math.floor(1000 + Math.random() * 9000)); // 4-digit
+        const tempPin = String(randomInt(1000, 10000)); // 4-digit CSPRNG
         const salt = randomBytes(16).toString('hex');
-        const pinHash = this.hashPin(tempPin, salt);
+        const pinHash = await this.hashPin(tempPin, salt);
 
         const existing = await this.db
             .selectFrom('member_credentials')
@@ -132,7 +133,13 @@ export class MemberCredentialService {
         return { temporary_pin: tempPin };
     }
 
-    private hashPin(pin: string, salt: string): string {
-        return createHash('sha256').update(pin + salt).digest('hex');
+    private async hashPin(pin: string, _salt?: string): Promise<string> {
+        // Use bcrypt with cost 12 instead of SHA-256 for PIN hashing
+        // 4-digit PINs have only 10,000 possibilities — SHA-256 is trivially brute-forced
+        return bcrypt.hash(pin, 12);
+    }
+
+    private async verifyPinHash(pin: string, hash: string): Promise<boolean> {
+        return bcrypt.compare(pin, hash);
     }
 }

@@ -5,11 +5,21 @@ import { publicDb, getPool } from '../config/database';
 import { ValidationError, NotFoundError, AppError } from '../middleware/errorHandler';
 import { requireSuperAdmin } from '../middleware/superAdmin';
 import { clearTenantCache } from '../middleware/tenantResolver';
+import { rateLimit } from '../middleware/rateLimiter';
+
+// Rate limiter for super admin routes: 30 requests per 60s per IP
+const adminRateLimit = rateLimit({
+    maxRequests: 30,
+    windowSeconds: 60,
+    keyPrefix: 'rl:super-admin',
+    message: 'Too many admin requests. Please try again later.',
+});
 
 // Router setup
 const app = new Hono();
 
-// Apply Admin Protection to all routes in this file
+// Apply rate limiting before Admin Protection to all routes
+app.use('*', adminRateLimit);
 app.use('*', requireSuperAdmin);
 
 // ---------------------------------------------------------------------------
@@ -22,7 +32,11 @@ const createTenantSchema = z.object({
     subdomain: z.string().min(3).max(50).regex(/^[a-z0-9-]+$/, "Subdomain must be lowercase alphanumeric with dashes"),
     contact_email: z.string().email().optional(),
     contact_phone: z.string().optional(),
-    admin_password: z.string().min(8).optional(),
+    admin_password: z.string().min(12)
+        .regex(/[A-Z]/, 'Must contain an uppercase letter')
+        .regex(/[a-z]/, 'Must contain a lowercase letter')
+        .regex(/[0-9]/, 'Must contain a number')
+        .regex(/[!@#$%^&*(),.?":{}|<>]/, 'Must contain a special character'),
 });
 
 const updateTenantSchema = z.object({
@@ -367,16 +381,21 @@ app.get('/tenants/:id/stats', async (c) => {
         throw new NotFoundError('Tenant', id);
     }
 
-    // Get member count
+    // Get member count — validate and sanitize schema name
     const poolInstance = getPool();
+    const VALID_SCHEMA = /^tenant_[a-z0-9_]+$/;
+    const safeSchema = tenant.schema_name.replace(/[^a-zA-Z0-9_]/g, '');
+    if (!VALID_SCHEMA.test(safeSchema)) {
+        throw new AppError(500, 'Invalid tenant schema name', 'INVALID_SCHEMA');
+    }
     const memberCountResult = await poolInstance.query(
-        `SELECT COUNT(*) as count FROM ${tenant.schema_name}.members WHERE deleted_at IS NULL`
+        `SELECT COUNT(*) as count FROM "${safeSchema}".members WHERE deleted_at IS NULL`
     );
     const memberCount = parseInt(memberCountResult.rows[0]?.count || '0', 10);
 
     // Get staff count
     const staffCountResult = await poolInstance.query(
-        `SELECT COUNT(*) as count FROM ${tenant.schema_name}.staff`
+        `SELECT COUNT(*) as count FROM "${safeSchema}".staff`
     );
     const staffCount = parseInt(staffCountResult.rows[0]?.count || '0', 10);
 
@@ -400,6 +419,8 @@ app.get('/tenants/:id/stats', async (c) => {
  */
 app.post('/tenants/:id/suspend', async (c) => {
     const id = c.req.param('id');
+    const clientIp = c.req.header('x-forwarded-for')?.split(',')[0].trim()
+        || c.req.header('x-real-ip') || 'unknown';
 
     const tenant = await publicDb
         .updateTable('tenants')
@@ -417,6 +438,21 @@ app.post('/tenants/:id/suspend', async (c) => {
 
     clearTenantCache(tenant.subdomain);
 
+    // Audit log the suspension
+    try {
+        const pool = getPool();
+        await pool.query(
+            `INSERT INTO public.tenant_audit_log (schema_name, tenant_code, operation, details)
+             VALUES ($1, $2, $3, $4)`,
+            [
+                tenant.schema_name,
+                tenant.code,
+                'TENANT_SUSPENDED',
+                JSON.stringify({ tenantId: id, ip: clientIp, timestamp: new Date().toISOString() }),
+            ],
+        );
+    } catch { /* audit log failure should not block the response */ }
+
     return c.json({
         success: true,
         message: 'Tenant suspended successfully',
@@ -430,6 +466,8 @@ app.post('/tenants/:id/suspend', async (c) => {
  */
 app.post('/tenants/:id/reactivate', async (c) => {
     const id = c.req.param('id');
+    const clientIp = c.req.header('x-forwarded-for')?.split(',')[0].trim()
+        || c.req.header('x-real-ip') || 'unknown';
 
     const tenant = await publicDb
         .updateTable('tenants')
@@ -447,11 +485,30 @@ app.post('/tenants/:id/reactivate', async (c) => {
 
     clearTenantCache(tenant.subdomain);
 
+    // Audit log the reactivation
+    try {
+        const pool = getPool();
+        await pool.query(
+            `INSERT INTO public.tenant_audit_log (schema_name, tenant_code, operation, details)
+             VALUES ($1, $2, $3, $4)`,
+            [
+                tenant.schema_name,
+                tenant.code,
+                'TENANT_REACTIVATED',
+                JSON.stringify({ tenantId: id, ip: clientIp, timestamp: new Date().toISOString() }),
+            ],
+        );
+    } catch { /* audit log failure should not block the response */ }
+
     return c.json({
         success: true,
         message: 'Tenant reactivated successfully',
         data: tenant
     });
+});
+
+const extendSubscriptionSchema = z.object({
+    days: z.number().int().positive().max(365, 'Cannot extend more than 365 days at a time'),
 });
 
 /**
@@ -460,14 +517,22 @@ app.post('/tenants/:id/reactivate', async (c) => {
  */
 app.post('/tenants/:id/extend-subscription', async (c) => {
     const id = c.req.param('id');
-    const body = await c.req.json() as { days: number };
+    const body = await c.req.json();
 
-    if (!body.days || body.days <= 0) {
-        throw new ValidationError('days must be a positive number');
+    const result = extendSubscriptionSchema.safeParse(body);
+    if (!result.success) {
+        throw new ValidationError('Validation failed', {
+            errors: result.error.issues.map((e) => ({
+                field: e.path.join('.'),
+                message: e.message,
+            })),
+        });
     }
 
+    const { days } = result.data;
+
     const expiryDate = new Date();
-    expiryDate.setDate(expiryDate.getDate() + body.days);
+    expiryDate.setDate(expiryDate.getDate() + days);
 
     const tenant = await publicDb
         .updateTable('tenants')
@@ -491,7 +556,7 @@ app.post('/tenants/:id/extend-subscription', async (c) => {
         data: {
             tenantId: id,
             newExpiryDate: tenant.subscription_expires_at,
-            daysExtended: body.days
+            daysExtended: days
         }
     });
 });
@@ -510,13 +575,15 @@ app.get('/search', async (c) => {
         }, 400);
     }
 
+    // Escape LIKE pattern characters to prevent pattern injection
+    const escapedQuery = query.replace(/[%_\\]/g, '\\$&');
     const tenants = await publicDb
         .selectFrom('tenants')
         .selectAll()
         .where((eb) => eb.or([
-            eb('sacco_name', 'ilike', `%${query}%`),
-            eb('code', 'ilike', `%${query}%`),
-            eb('subdomain', 'ilike', `%${query}%`)
+            eb('sacco_name', 'ilike', `%${escapedQuery}%`),
+            eb('code', 'ilike', `%${escapedQuery}%`),
+            eb('subdomain', 'ilike', `%${escapedQuery}%`)
         ]))
         .orderBy('created_at', 'desc')
         .limit(20)
