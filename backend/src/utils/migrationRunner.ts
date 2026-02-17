@@ -11,9 +11,12 @@ export class MigrationRunner {
 
     /**
      * Runs migrations for the Public Schema (Global Registry)
+     * After the tenant_engine migration creates the template schema,
+     * tenant migrations are applied to populate it before subsequent
+     * public migrations that ALTER template tables.
      */
     async runPublicMigrations() {
-        console.log('🚀 Running Public Schema Migrations...');
+        console.log('🔵 [INFO] Running Public Schema Migrations...');
         const files = await this.getSortedSqlFiles(this.publicMigrationsPath);
 
         if (files.length === 0) {
@@ -22,8 +25,16 @@ export class MigrationRunner {
         }
 
         const client = await getPool().connect();
+        let templatePopulated = false;
         try {
             for (const file of files) {
+                // After the tenant engine migration creates the template schema,
+                // populate it with tenant tables before any migration that ALTERs them
+                if (!templatePopulated && file.name > '004_' && file.name >= '005_') {
+                    await this.populateTemplateSchema();
+                    templatePopulated = true;
+                }
+
                 console.log(`  [PUBLIC] Executing ${file.name}`);
                 const sql = await fs.readFile(file.path, 'utf-8');
                 try {
@@ -39,9 +50,9 @@ export class MigrationRunner {
                     }
                 }
             }
-            console.log('✅ Public Schema Migrations Completed.');
+            console.log('🟢 [SUCCESS] Public Schema Migrations Completed.');
         } catch (error) {
-            console.error('❌ Public Migration Failed:', error);
+            console.error('🔴 [ERROR] Public Migration Failed:', error);
             throw error;
         } finally {
             client.release();
@@ -54,7 +65,7 @@ export class MigrationRunner {
      * @param tenantId - The UUID of the tenant from the registry
      */
     async runTenantMigrations(schemaName: string, tenantId: string) {
-        console.log(`🏢 Running Tenant Migrations for schema: ${schemaName}`);
+        console.log(`🔵 [INFO] Running Tenant Migrations for schema: ${schemaName}`);
         const files = await this.getSortedSqlFiles(this.tenantMigrationsPath);
 
         if (files.length === 0) {
@@ -105,7 +116,7 @@ export class MigrationRunner {
                 } catch (error) {
                     // Rollback on failure
                     await client.query('ROLLBACK');
-                    console.error(`  [TENANT] ❌ Failed ${file.name}`, error);
+                    console.error(`🔴 [TENANT] Failed ${file.name}`, error);
                     throw error; // Stop execution
                 }
             }
@@ -130,6 +141,60 @@ export class MigrationRunner {
                 return [];
             }
             throw e;
+        }
+    }
+
+    /**
+     * Populate the template schema with tenant table definitions.
+     * Runs tenant migration SQL files against the 'template' schema so that
+     * subsequent public migrations (e.g. multitenancy enhancements) that
+     * ALTER template tables can succeed on a fresh database.
+     *
+     * FK REFERENCES clauses are stripped because tenant migrations have
+     * forward cross-file references (e.g. 001 → 002). The template schema
+     * is only used as a structural source for cloning into tenant schemas
+     * via provision_tenant_schema(), so FK constraints are not needed here.
+     */
+    private async populateTemplateSchema() {
+        console.log('🔵 [INFO] Populating template schema with tenant tables...');
+        const files = await this.getSortedSqlFiles(this.tenantMigrationsPath);
+
+        if (files.length === 0) {
+            console.log('✨ No tenant migrations to apply to template.');
+            return;
+        }
+
+        const client = await getPool().connect();
+        try {
+            await client.query('SET search_path TO template, public');
+
+            for (const file of files) {
+                console.log(`  [TEMPLATE] Executing ${file.name}`);
+                let sql = await fs.readFile(file.path, 'utf-8');
+
+                // Strip FK REFERENCES so migrations with forward dependencies
+                // can execute regardless of file order. Template is a structural
+                // blueprint — referential integrity is enforced on real tenant schemas.
+                sql = sql.replace(/REFERENCES\s+[\w."]+\s*\([^)]+\)(\s+ON\s+(DELETE|UPDATE)\s+(CASCADE|SET\s+NULL|SET\s+DEFAULT|RESTRICT|NO\s+ACTION))*/gi, '');
+
+                try {
+                    await client.query(sql);
+                } catch (error: any) {
+                    // Skip "already exists" errors on re-runs
+                    if (error.code === '42P07' || error.code === '42710') {
+                        console.log(`  [TEMPLATE] Skipping ${file.name} (already exists)`);
+                    } else {
+                        throw error;
+                    }
+                }
+            }
+            console.log('🟢 [SUCCESS] Template schema populated.');
+        } catch (error) {
+            console.error('🔴 [ERROR] Template population failed:', error);
+            throw error;
+        } finally {
+            await client.query('RESET search_path').catch(() => {});
+            client.release();
         }
     }
 }

@@ -69,12 +69,12 @@ export class DatabaseManager {
         // LOGGING: Client Notices (RAISE NOTICE, etc.)
         this.pool.on('connect', (client) => {
             client.on('notice', (msg) => {
-                console.log(`ℹ️  [PG NOTICE]: [${msg.code}] ${msg.severity} - ${msg.message}`);
+                console.log(`🔵 [PG NOTICE]: [${msg.code}] ${msg.severity} - ${msg.message}`);
             });
         });
 
         // Log pool info on connect
-        console.log(`📊 [DB POOL INITIALIZED]: max=${poolMax}, idle=${idleTimeout}ms, connection=${connectionTimeout}ms`);
+        console.log(`🔵 [DB POOL INITIALIZED]: max=${poolMax}, idle=${idleTimeout}ms, connection=${connectionTimeout}ms`);
 
         const kyselyLogger = (event: LogEvent) => {
             if (event.level === 'query') {
