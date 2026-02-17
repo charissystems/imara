@@ -173,72 +173,81 @@ export class ShareService {
         const newTotalInvested = existingInvested.plus(totalAmount);
         const newAvgCost = newTotalInvested.div(newTotal);
 
-        if (holding) {
-            // Update existing holding
-            const updated = await this.db
-                .updateTable('share_holdings')
-                .set({
-                    total_shares: newTotal as any,
-                    total_invested: newTotalInvested.toString() as any,
-                    average_cost_per_share: newAvgCost.toString() as any,
-                    updated_at: new Date() as any,
+        // Execute all operations atomically in a transaction
+        const txResult = await this.db.transaction().execute(async (trx) => {
+            let txHolding;
+
+            if (holding) {
+                // Update existing holding
+                txHolding = await trx
+                    .updateTable('share_holdings')
+                    .set({
+                        total_shares: newTotal as any,
+                        total_invested: newTotalInvested.toString() as any,
+                        average_cost_per_share: newAvgCost.toString() as any,
+                        updated_at: new Date() as any,
+                    })
+                    .where('id', '=', holding.id)
+                    .returningAll()
+                    .executeTakeFirstOrThrow();
+            } else {
+                // Create new holding
+                const certNumber = `SH-${nanoid(12)}`;
+                txHolding = await trx
+                    .insertInto('share_holdings')
+                    .values({
+                        member_id: input.memberId,
+                        share_class_id: input.shareClassId,
+                        total_shares: input.quantity as any,
+                        average_cost_per_share: unitPrice.toString() as any,
+                        total_invested: totalAmount.toString() as any,
+                        certificate_number: certNumber,
+                        purchase_date: new Date() as any,
+                        is_locked: false as any,
+                        created_by: input.recordedBy,
+                    })
+                    .returningAll()
+                    .executeTakeFirstOrThrow();
+            }
+
+            // Record transaction
+            const transaction = await trx
+                .insertInto('share_transactions')
+                .values({
+                    share_holding_id: txHolding.id,
+                    member_id: input.memberId,
+                    transaction_type: 'purchase' as any,
+                    quantity: input.quantity as any,
+                    unit_price: unitPrice.toString() as any,
+                    total_amount: totalAmount.toString() as any,
+                    transaction_date: new Date() as any,
+                    status: 'completed' as any,
+                    description: `Purchase of ${input.quantity} ${shareClass.name} shares`,
+                    recorded_by: input.recordedBy,
                 })
-                .where('id', '=', holding.id)
                 .returningAll()
                 .executeTakeFirstOrThrow();
-            holding = updated;
-        } else {
-            // Create new holding
-            const certNumber = `SH-${nanoid(12)}`;
-            holding = await this.db
-                .insertInto('share_holdings')
+
+            // Update share register
+            await trx
+                .insertInto('share_register')
                 .values({
                     member_id: input.memberId,
                     share_class_id: input.shareClassId,
-                    total_shares: input.quantity as any,
-                    average_cost_per_share: unitPrice.toString() as any,
-                    total_invested: totalAmount.toString() as any,
-                    certificate_number: certNumber,
-                    purchase_date: new Date() as any,
-                    is_locked: false as any,
-                    created_by: input.recordedBy,
+                    opening_balance: currentShares as any,
+                    transaction_quantity: input.quantity,
+                    closing_balance: newTotal,
+                    transaction_date: new Date() as any,
+                    reference_type: 'purchase',
+                    reference_id: transaction.id,
                 })
-                .returningAll()
-                .executeTakeFirstOrThrow();
-        }
+                .execute();
 
-        // Record transaction
-        const transaction = await this.db
-            .insertInto('share_transactions')
-            .values({
-                share_holding_id: holding.id,
-                member_id: input.memberId,
-                transaction_type: 'purchase' as any,
-                quantity: input.quantity as any,
-                unit_price: unitPrice.toString() as any,
-                total_amount: totalAmount.toString() as any,
-                transaction_date: new Date() as any,
-                status: 'completed' as any,
-                description: `Purchase of ${input.quantity} ${shareClass.name} shares`,
-                recorded_by: input.recordedBy,
-            })
-            .returningAll()
-            .executeTakeFirstOrThrow();
+            return { holding: txHolding, transaction };
+        });
 
-        // Update share register
-        await this.db
-            .insertInto('share_register')
-            .values({
-                member_id: input.memberId,
-                share_class_id: input.shareClassId,
-                opening_balance: currentShares as any,
-                transaction_quantity: input.quantity,
-                closing_balance: newTotal,
-                transaction_date: new Date() as any,
-                reference_type: 'purchase',
-                reference_id: transaction.id,
-            })
-            .execute();
+        holding = txResult.holding;
+        const transaction = txResult.transaction;
 
         appLogger.info('Shares purchased', {
             memberId: input.memberId,

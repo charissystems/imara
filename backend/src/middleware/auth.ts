@@ -14,7 +14,6 @@ import { isTokenBlacklisted } from '../services/tokenBlacklistService';
 export async function authMiddleware(c: Context<Env>, next: Next) {
     const publicPaths = [
         '/auth/login',
-        '/auth/register',
         '/auth/forgot-password',
         '/auth/reset-password',
         '/auth/verify-otp',

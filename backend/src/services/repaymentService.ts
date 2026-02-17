@@ -547,40 +547,43 @@ export class RepaymentService {
         reason: string,
         writtenOffBy: string,
     ): Promise<void> {
-        // Mark all outstanding installments as written off
-        await this.db
-            .updateTable('loan_schedules')
-            .set({
-                status: 'written_off' as any,
-                updated_at: new Date() as any,
-            })
-            .where('loan_account_id', '=', loanAccountId)
-            .where('status', 'in', ['scheduled', 'partial', 'overdue'])
-            .execute();
+        // Execute all write-off operations atomically in a transaction
+        await this.db.transaction().execute(async (trx) => {
+            // Mark all outstanding installments as written off
+            await trx
+                .updateTable('loan_schedules')
+                .set({
+                    status: 'written_off' as any,
+                    updated_at: new Date() as any,
+                })
+                .where('loan_account_id', '=', loanAccountId)
+                .where('status', 'in', ['scheduled', 'partial', 'overdue'])
+                .execute();
 
-        // Mark loan as written off
-        await this.db
-            .updateTable('loan_accounts')
-            .set({
-                status: 'written_off' as any,
-                updated_at: new Date() as any,
-            })
-            .where('id', '=', loanAccountId)
-            .execute();
+            // Mark loan as written off
+            await trx
+                .updateTable('loan_accounts')
+                .set({
+                    status: 'written_off' as any,
+                    updated_at: new Date() as any,
+                })
+                .where('id', '=', loanAccountId)
+                .execute();
 
-        // Record recovery action
-        await this.db
-            .insertInto('loan_recovery_actions')
-            .values({
-                loan_account_id: loanAccountId,
-                action_type: 'write_off' as any,
-                action_date: new Date() as any,
-                description: reason,
-                amount_recovered: new Decimal(0) as any,
-                status: 'completed' as any,
-                created_by: writtenOffBy,
-            })
-            .execute();
+            // Record recovery action
+            await trx
+                .insertInto('loan_recovery_actions')
+                .values({
+                    loan_account_id: loanAccountId,
+                    action_type: 'write_off' as any,
+                    action_date: new Date() as any,
+                    description: reason,
+                    amount_recovered: new Decimal(0) as any,
+                    status: 'completed' as any,
+                    created_by: writtenOffBy,
+                })
+                .execute();
+        });
 
         appLogger.info('Loan written off', {
             loanAccountId,

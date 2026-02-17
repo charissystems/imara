@@ -14,6 +14,7 @@
 
 import { Hono } from 'hono';
 import { z } from 'zod';
+import Decimal from 'decimal.js';
 import { Env } from '../middleware/types';
 import { validate, getValidatedData } from '../middleware/validation';
 import { NotFoundError, UnauthorizedError } from '../middleware/errorHandler';
@@ -420,88 +421,95 @@ accountingRoutes.post('/year-end-close', async (c) => {
 
         const year = c.req.query('year') || String(new Date().getFullYear());
 
-        // 1. Get all income/expense accounts
-        const incomeExpenseAccounts = await db
-            .selectFrom('accounts')
-            .selectAll()
-            .where('deleted_at', 'is', null)
-            .where('account_type', 'in', ['income', 'expense'])
-            .execute();
+        // Execute entire year-end close atomically in a single transaction
+        const result = await db.transaction().execute(async (trx) => {
+            // 1. Get all income/expense accounts
+            const incomeExpenseAccounts = await trx
+                .selectFrom('accounts')
+                .selectAll()
+                .where('deleted_at', 'is', null)
+                .where('account_type', 'in', ['income', 'expense'])
+                .execute();
 
-        // 2. Calculate net income (sum of income - sum of expense current_balances)
-        let totalIncome = 0;
-        let totalExpenses = 0;
-        for (const acc of incomeExpenseAccounts) {
-            const bal = Number(acc.current_balance || 0);
-            if (acc.account_type === 'income') totalIncome += bal;
-            else totalExpenses += bal;
-        }
-        const netIncome = totalIncome - totalExpenses;
+            // 2. Calculate net income using Decimal for precision
+            let totalIncome = new Decimal(0);
+            let totalExpenses = new Decimal(0);
+            for (const acc of incomeExpenseAccounts) {
+                const bal = new Decimal(acc.current_balance?.toString() || '0');
+                if (acc.account_type === 'income') totalIncome = totalIncome.plus(bal);
+                else totalExpenses = totalExpenses.plus(bal);
+            }
+            const netIncome = totalIncome.minus(totalExpenses);
 
-        // 3. Zero out income/expense accounts
-        for (const acc of incomeExpenseAccounts) {
-            await db
-                .updateTable('accounts')
+            // 3. Zero out income/expense accounts
+            for (const acc of incomeExpenseAccounts) {
+                await trx
+                    .updateTable('accounts')
+                    .set({
+                        current_balance: '0' as any,
+                        updated_by: user.id,
+                        updated_at: new Date(),
+                    })
+                    .where('id', '=', acc.id)
+                    .execute();
+            }
+
+            // 4. Post net income to retained earnings (equity account)
+            const retainedEarnings = await trx
+                .selectFrom('accounts')
+                .selectAll()
+                .where('deleted_at', 'is', null)
+                .where('account_type', '=', 'equity')
+                .where('code', 'like', '%3200%')
+                .executeTakeFirst();
+
+            if (retainedEarnings) {
+                const currentRE = new Decimal(retainedEarnings.current_balance?.toString() || '0');
+                const newRE = currentRE.plus(netIncome);
+                await trx
+                    .updateTable('accounts')
+                    .set({
+                        current_balance: newRE.toString() as any,
+                        updated_by: user.id,
+                        updated_at: new Date(),
+                    })
+                    .where('id', '=', retainedEarnings.id)
+                    .execute();
+            }
+
+            // 5. Close all open periods in the year
+            const periodsResult = await trx
+                .updateTable('financial_periods')
                 .set({
-                    current_balance: 0 as any,
+                    status: 'closed',
                     updated_by: user.id,
                     updated_at: new Date(),
                 })
-                .where('id', '=', acc.id)
+                .where('status', '!=', 'closed')
+                .where('deleted_at', 'is', null)
+                .returningAll()
                 .execute();
-        }
 
-        // 4. Post net income to retained earnings (equity account)
-        const retainedEarnings = await db
-            .selectFrom('accounts')
-            .selectAll()
-            .where('deleted_at', 'is', null)
-            .where('account_type', '=', 'equity')
-            .where('code', 'like', '%3200%')
-            .executeTakeFirst();
-
-        if (retainedEarnings) {
-            await db
-                .updateTable('accounts')
-                .set({
-                    current_balance: (Number(retainedEarnings.current_balance || 0) + netIncome) as any,
-                    updated_by: user.id,
-                    updated_at: new Date(),
-                })
-                .where('id', '=', retainedEarnings.id)
+            // 6. Lock all transactions for the year
+            await trx
+                .updateTable('transactions')
+                .set({ is_locked: true as any })
+                .where('is_locked', '=', false)
                 .execute();
-        }
 
-        // 5. Close all open periods in the year
-        const periodsResult = await db
-            .updateTable('financial_periods')
-            .set({
-                status: 'closed',
-                updated_by: user.id,
-                updated_at: new Date(),
-            })
-            .where('status', '!=', 'closed')
-            .where('deleted_at', 'is', null)
-            .returningAll()
-            .execute();
-
-        // 6. Lock all transactions for the year
-        await db
-            .updateTable('transactions')
-            .set({ is_locked: true as any })
-            .where('is_locked', '=', false)
-            .execute();
+            return {
+                year,
+                totalIncome: totalIncome.toFixed(2),
+                totalExpenses: totalExpenses.toFixed(2),
+                netIncome: netIncome.toFixed(2),
+                retainedEarningsAccount: retainedEarnings?.code || null,
+                periodsClosed: periodsResult.length,
+            };
+        });
 
         return c.json({
             success: true,
-            data: {
-                year,
-                totalIncome,
-                totalExpenses,
-                netIncome,
-                retainedEarningsAccount: retainedEarnings?.code || null,
-                periodsClosed: periodsResult.length,
-            },
+            data: result,
             meta: { yearEndClosed: true },
         });
     } catch (error) {
@@ -532,7 +540,10 @@ accountingRoutes.get('/journals', async (c) => {
             query = query.where('status', '=', status as any);
         }
 
-        const journals = await query.execute();
+        const limit = Math.min(parseInt(c.req.query('limit') || '100', 10), 200);
+        const offset = Math.max(parseInt(c.req.query('offset') || '0', 10), 0);
+
+        const journals = await query.limit(limit).offset(offset).execute();
 
         return c.json({
             success: true,
@@ -838,58 +849,60 @@ accountingRoutes.post('/journals/:id/post', async (c) => {
             }, 400);
         }
 
-        // Get lines
-        const lines = await db
-            .selectFrom('manual_journal_lines')
-            .selectAll()
-            .where('journal_entry_id', '=', id)
-            .execute();
-
-        // Update account current_balances based on lines
-        for (const line of lines) {
-            const account = await db
-                .selectFrom('accounts')
+        // Get lines and update account balances atomically in a transaction
+        const updated = await db.transaction().execute(async (trx) => {
+            const lines = await trx
+                .selectFrom('manual_journal_lines')
                 .selectAll()
-                .where('id', '=', line.account_id)
-                .executeTakeFirst();
+                .where('journal_entry_id', '=', id)
+                .execute();
 
-            if (!account) continue;
+            // Update account current_balances based on lines
+            for (const line of lines) {
+                const account = await trx
+                    .selectFrom('accounts')
+                    .selectAll()
+                    .where('id', '=', line.account_id)
+                    .executeTakeFirst();
 
-            const debit = Number(line.debit_amount || 0);
-            const credit = Number(line.credit_amount || 0);
-            const current = Number(account.current_balance || 0);
+                if (!account) continue;
 
-            // Debit-normal accounts: debits increase, credits decrease
-            // Credit-normal accounts: credits increase, debits decrease
-            const delta = account.normal_balance === 'debit'
-                ? debit - credit
-                : credit - debit;
+                const debit = new Decimal(line.debit_amount?.toString() || '0');
+                const credit = new Decimal(line.credit_amount?.toString() || '0');
+                const current = new Decimal(account.current_balance?.toString() || '0');
 
-            await db
-                .updateTable('accounts')
+                // Debit-normal accounts: debits increase, credits decrease
+                // Credit-normal accounts: credits increase, debits decrease
+                const delta = account.normal_balance === 'debit'
+                    ? debit.minus(credit)
+                    : credit.minus(debit);
+
+                await trx
+                    .updateTable('accounts')
+                    .set({
+                        current_balance: current.plus(delta).toString() as any,
+                        updated_at: new Date(),
+                    })
+                    .where('id', '=', line.account_id)
+                    .execute();
+            }
+
+            // Mark journal as posted
+            return await trx
+                .updateTable('manual_journal_entries')
                 .set({
-                    current_balance: (current + delta) as any,
+                    status: 'posted',
                     updated_at: new Date(),
                 })
-                .where('id', '=', line.account_id)
-                .execute();
-        }
-
-        // Mark journal as posted
-        const updated = await db
-            .updateTable('manual_journal_entries')
-            .set({
-                status: 'posted',
-                updated_at: new Date(),
-            })
-            .where('id', '=', id)
-            .returningAll()
-            .executeTakeFirstOrThrow();
+                .where('id', '=', id)
+                .returningAll()
+                .executeTakeFirstOrThrow();
+        });
 
         return c.json({
             success: true,
             data: updated,
-            meta: { posted: true, linesProcessed: lines.length },
+            meta: { posted: true },
         });
     } catch (error) {
         throw error;
@@ -947,49 +960,55 @@ accountingRoutes.post('/auto-post', validate(autoPostSchema), async (c) => {
 
         const txnCode = `AUTO-${data.transaction_type.toUpperCase()}-${Date.now().toString(36).toUpperCase()}`;
 
-        // Create transaction record
-        const transaction = await db
-            .insertInto('transactions')
-            .values({
-                code: txnCode,
-                member_id: data.member_id || null,
-                category: data.transaction_type as any,
-                amount: data.amount as any,
-                currency_code: 'UGX',
-                transaction_date: new Date() as any,
-                payment_method: 'system' as any,
-                reference_code: data.reference_id || null,
-                debit_account_id: data.debit_account_id,
-                credit_account_id: data.credit_account_id,
-                financial_period_id: currentPeriod?.id || null,
-                description: data.description,
-                source_type: 'auto_post',
-                recorded_by: user?.id || null,
-            } as any)
-            .returningAll()
-            .executeTakeFirstOrThrow();
+        // Execute auto-post atomically in a database transaction
+        const result = await db.transaction().execute(async (trx) => {
+            // Create transaction record
+            const transaction = await trx
+                .insertInto('transactions')
+                .values({
+                    code: txnCode,
+                    member_id: data.member_id || null,
+                    category: data.transaction_type as any,
+                    amount: data.amount as any,
+                    currency_code: 'UGX',
+                    transaction_date: new Date() as any,
+                    payment_method: 'system' as any,
+                    reference_code: data.reference_id || null,
+                    debit_account_id: data.debit_account_id,
+                    credit_account_id: data.credit_account_id,
+                    financial_period_id: currentPeriod?.id || null,
+                    description: data.description,
+                    source_type: 'auto_post',
+                    recorded_by: user?.id || null,
+                } as any)
+                .returningAll()
+                .executeTakeFirstOrThrow();
 
-        // Update account balances
-        const debitCurrent = Number(debitAccount.current_balance || 0);
-        const creditCurrent = Number(creditAccount.current_balance || 0);
+            // Update account balances atomically using Decimal for precision
+            const debitCurrent = new Decimal(debitAccount.current_balance?.toString() || '0');
+            const creditCurrent = new Decimal(creditAccount.current_balance?.toString() || '0');
+            const amount = new Decimal(data.amount);
 
-        const debitDelta = debitAccount.normal_balance === 'debit' ? data.amount : -data.amount;
-        const creditDelta = creditAccount.normal_balance === 'credit' ? data.amount : -data.amount;
+            const debitDelta = debitAccount.normal_balance === 'debit' ? amount : amount.negated();
+            const creditDelta = creditAccount.normal_balance === 'credit' ? amount : amount.negated();
 
-        await Promise.all([
-            db.updateTable('accounts').set({
-                current_balance: (debitCurrent + debitDelta) as any,
-                updated_at: new Date(),
-            }).where('id', '=', debitAccount.id).execute(),
-            db.updateTable('accounts').set({
-                current_balance: (creditCurrent + creditDelta) as any,
-                updated_at: new Date(),
-            }).where('id', '=', creditAccount.id).execute(),
-        ]);
+            await Promise.all([
+                trx.updateTable('accounts').set({
+                    current_balance: debitCurrent.plus(debitDelta).toString() as any,
+                    updated_at: new Date(),
+                }).where('id', '=', debitAccount.id).execute(),
+                trx.updateTable('accounts').set({
+                    current_balance: creditCurrent.plus(creditDelta).toString() as any,
+                    updated_at: new Date(),
+                }).where('id', '=', creditAccount.id).execute(),
+            ]);
+
+            return transaction;
+        });
 
         return c.json({
             success: true,
-            data: transaction,
+            data: result,
             meta: {
                 autoPosted: true,
                 debitAccount: debitAccount.code,

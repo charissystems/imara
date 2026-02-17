@@ -16,9 +16,17 @@ import { TwoFactorService } from '../services/twoFactorService';
 import { getTenantDb } from '../config/database';
 import { appLogger } from '../middleware/logger';
 import { blacklistToken } from '../services/tokenBlacklistService';
-import { loginRateLimit, registerRateLimit, passwordResetRateLimit, otpRateLimit } from '../middleware/rateLimiter';
+import { loginRateLimit, registerRateLimit, passwordResetRateLimit, otpRateLimit, rateLimit } from '../middleware/rateLimiter';
 
 export const authRoutes = new Hono<Env>();
+
+/** Rate limiter for token refresh: 10 per 60s */
+const refreshRateLimit = rateLimit({
+    maxRequests: 10,
+    windowSeconds: 60,
+    keyPrefix: 'rl:refresh',
+    message: 'Too many refresh attempts. Please try again in 1 minute.',
+});
 
 // Password validation regex: at least one uppercase, one lowercase, and one number
 const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).+$/;
@@ -300,7 +308,7 @@ authRoutes.get('/me', async (c) => {
  * POST /auth/refresh
  * Refresh access token using refresh token
  */
-authRoutes.post('/refresh', async (c) => {
+authRoutes.post('/refresh', refreshRateLimit, async (c) => {
     try {
         const bearerToken = c.req.header('Authorization');
         if (!bearerToken || !bearerToken.startsWith('Bearer ')) {
@@ -614,7 +622,6 @@ authRoutes.post('/2fa/setup', async (c) => {
             success: true,
             data: {
                 qrCodeDataUrl: setup.qrCodeDataUrl,
-                secret: setup.secret,
                 backupCodes: setup.backupCodes,
             },
             meta: {

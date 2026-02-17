@@ -237,9 +237,9 @@ export class DatabaseManager {
 export const dbManager = new DatabaseManager({
     host: process.env.DB_HOST || 'localhost',
     port: Number(process.env.DB_PORT) || 5432,
-    database: process.env.DB_NAME || 'postgres',
-    user: process.env.DB_USER || 'postgres',
-    password: process.env.DB_PASSWORD || 'password',
+    database: process.env.DB_NAME || (() => { throw new Error('DB_NAME environment variable is required'); })(),
+    user: process.env.DB_USER || (() => { throw new Error('DB_USER environment variable is required'); })(),
+    password: process.env.DB_PASSWORD || (() => { throw new Error('DB_PASSWORD environment variable is required'); })(),
 });
 
 export const publicDb = dbManager.publicDb;

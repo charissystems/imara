@@ -157,12 +157,18 @@ app.patch('/staff/:id', async (c) => {
     const id = c.req.param('id');
     const body = await c.req.json();
 
-    // Ensure we are only updating staff belonging to this tenant
-    // (Implicitly guaranteed because 'db' only connects to this tenant)
+    // Whitelist mutable fields to prevent mass assignment attacks
+    const allowedFields = ['first_name', 'last_name', 'phone', 'position', 'department', 'status', 'hire_date'] as const;
+    const sanitized: Record<string, any> = { updated_at: new Date() };
+    for (const field of allowedFields) {
+        if (body[field] !== undefined) {
+            sanitized[field] = body[field];
+        }
+    }
 
     const updated = await db
         .updateTable('staff')
-        .set({ ...body, updated_at: new Date() })
+        .set(sanitized)
         .where('id', '=', id)
         .returningAll()
         .executeTakeFirst();

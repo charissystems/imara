@@ -7,6 +7,7 @@ import { NotFoundError, UnauthorizedError, ValidationError } from '../middleware
 import { ShareRepository } from '../repositories/shareRepository';
 import { ShareService } from '../services/shareService';
 import { hasPermission, enforcePermission } from '../middleware/rbac';
+import { rateLimit } from '../middleware/rateLimiter';
 
 export const shareRoutes = new Hono<Env>();
 
@@ -196,7 +197,7 @@ shareRoutes.patch('/classes/:classId', validate(updateShareClassSchema), async (
  * POST /shares/purchase
  * Purchase shares for a member
  */
-shareRoutes.post('/purchase', validate(purchaseSharesSchema), async (c) => {
+shareRoutes.post('/purchase', rateLimit({ maxRequests: 20, windowSeconds: 60, keyPrefix: 'rl:share-purchase' }), validate(purchaseSharesSchema), async (c) => {
     try {
         const data = getValidatedData<z.infer<typeof purchaseSharesSchema>>(c);
         const { schema_name } = c.get('tenant')!;
@@ -870,7 +871,7 @@ export default shareRoutes;
 // =============================================================================
 
 // Alias for purchases/:purchaseId - get single purchase
-shareRoutes.get('/purchases/:purchaseId', async (c) => {
+shareRoutes.get('/purchases/:purchaseId', enforcePermission('shares', 'read'), async (c) => {
     try {
         const { purchaseId } = c.req.param();
         const db = c.get('db')!;
@@ -910,7 +911,7 @@ shareRoutes.get('/purchases/:purchaseId', async (c) => {
 });
 
 // Member holdings by member ID
-shareRoutes.get('/members/:memberId/holdings', async (c) => {
+shareRoutes.get('/members/:memberId/holdings', enforcePermission('shares', 'read'), async (c) => {
     try {
         const { memberId } = c.req.param();
         const db = c.get('db')!;
@@ -938,7 +939,7 @@ shareRoutes.get('/members/:memberId/holdings', async (c) => {
 });
 
 // Member share transactions
-shareRoutes.get('/members/:memberId/transactions', async (c) => {
+shareRoutes.get('/members/:memberId/transactions', enforcePermission('shares', 'read'), async (c) => {
     try {
         const { memberId } = c.req.param();
         const db = c.get('db')!;
@@ -967,7 +968,7 @@ shareRoutes.get('/members/:memberId/transactions', async (c) => {
 });
 
 // Transfer details by transfer ID  
-shareRoutes.get('/transfers/:transferId', async (c) => {
+shareRoutes.get('/transfers/:transferId', enforcePermission('shares', 'read'), async (c) => {
     try {
         const { transferId } = c.req.param();
         const db = c.get('db')!;
@@ -1009,7 +1010,7 @@ shareRoutes.get('/transfers/:transferId', async (c) => {
 });
 
 // Dividend declarations list (alias to /dividends)
-shareRoutes.get('/dividends/declarations', async (c) => {
+shareRoutes.get('/dividends/declarations', enforcePermission('shares', 'read'), async (c) => {
     try {
         const db = c.get('db')!;
         const status = c.req.query('status');
@@ -1045,7 +1046,7 @@ shareRoutes.get('/dividends/declarations', async (c) => {
 });
 
 // Single dividend declaration
-shareRoutes.get('/dividends/declarations/:declarationId', async (c) => {
+shareRoutes.get('/dividends/declarations/:declarationId', enforcePermission('shares', 'read'), async (c) => {
     try {
         const { declarationId } = c.req.param();
         const db = c.get('db')!;
@@ -1079,7 +1080,7 @@ shareRoutes.get('/dividends/declarations/:declarationId', async (c) => {
 });
 
 // Approve dividend declaration (alias to /dividends/:dividendId/approve)
-shareRoutes.post('/dividends/declarations/:declarationId/approve', async (c) => {
+shareRoutes.post('/dividends/declarations/:declarationId/approve', enforcePermission('shares', 'approve'), async (c) => {
     try {
         const { declarationId } = c.req.param();
         const db = c.get('db')!;
@@ -1105,7 +1106,7 @@ shareRoutes.post('/dividends/declarations/:declarationId/approve', async (c) => 
 });
 
 // Member certificate
-shareRoutes.get('/members/:memberId/certificate', async (c) => {
+shareRoutes.get('/members/:memberId/certificate', enforcePermission('shares', 'read'), async (c) => {
     try {
         const { memberId } = c.req.param();
         const db = c.get('db')!;
@@ -1148,7 +1149,7 @@ shareRoutes.get('/members/:memberId/certificate', async (c) => {
 });
 
 // Share class analytics
-shareRoutes.get('/classes/:classId/analytics', async (c) => {
+shareRoutes.get('/classes/:classId/analytics', enforcePermission('shares', 'read'), async (c) => {
     try {
         const { classId } = c.req.param();
         const db = c.get('db')!;

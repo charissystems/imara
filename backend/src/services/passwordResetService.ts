@@ -190,12 +190,19 @@ export class PasswordResetService {
     }
 
     /**
-     * Validate a reset token without consuming it.
+     * Validate a reset token by atomically consuming it.
+     * Returns true if the token was valid (and is now deleted), false otherwise.
+     * @deprecated Prefer calling resetPassword() directly which validates and consumes.
      */
     async validateToken(token: string): Promise<boolean> {
         const redisKey = this.getRedisKey(token);
-        const exists = await this.redis.exists(redisKey);
-        return exists === 1;
+        // Atomically get and delete to prevent reuse / information leakage
+        const result = await this.redis.get(redisKey);
+        if (result) {
+            await this.redis.del(redisKey);
+            return true;
+        }
+        return false;
     }
 
     // ──────────────────────────────────────────────
@@ -207,7 +214,10 @@ export class PasswordResetService {
      */
     private generateToken(): string {
         const bytes = randomBytes(32);
-        const secret = process.env.JWT_SECRET || 'reset-token-secret';
+        const secret = process.env.JWT_SECRET;
+        if (!secret) {
+            throw new Error('JWT_SECRET environment variable is required for token generation');
+        }
         return createHmac('sha256', secret)
             .update(bytes)
             .digest('hex');

@@ -732,7 +732,7 @@ memberRoutes.post('/:id/portal-credentials', async (c) => {
             success: true,
             data: {
                 username: credentials.username,
-                temporaryPassword: credentials.tempPassword,
+                message: 'Temporary credentials have been generated. The password should be communicated via a secure out-of-band channel (email/SMS).',
                 welcomeMessage: welcome,
             },
             meta: { generated: true }
@@ -1022,10 +1022,19 @@ memberRoutes.get('/:id/next-of-kin', enforcePermission('members', 'read'), async
  * PUT /members/:id/next-of-kin
  * Update next-of-kin details for a member
  */
-memberRoutes.put('/:id/next-of-kin', enforcePermission('members', 'update'), async (c) => {
+const nextOfKinSchema = z.object({
+    name: z.string().min(1).max(200),
+    relationship: z.string().min(1).max(100),
+    phone: z.string().max(20).optional(),
+    email: z.string().email().max(200).optional(),
+    id_number: z.string().max(50).optional(),
+    address: z.string().max(500).optional(),
+});
+
+memberRoutes.put('/:id/next-of-kin', enforcePermission('members', 'update'), validate(nextOfKinSchema), async (c) => {
     try {
         const { id } = c.req.param();
-        const body = await c.req.json();
+        const body = getValidatedData<z.infer<typeof nextOfKinSchema>>(c);
         const { schema_name } = c.get('tenant')!;
         const user = c.get('user');
 
@@ -1072,27 +1081,35 @@ memberRoutes.get('/:id/audit-log', enforcePermission('audit', 'read'), async (c)
             throw new NotFoundError('Member', id);
         }
 
+        const total = await db
+            .selectFrom('audit_log')
+            .select(db.fn.countAll().as('count'))
+            .where('entity_type', '=', 'member')
+            .where('entity_id', '=', id)
+            .executeTakeFirst();
+
+        const totalCount = Number(total?.count || 0);
+        const offset = (page - 1) * limit;
+
         const entries = await db
             .selectFrom('audit_log')
             .selectAll()
             .where('entity_type', '=', 'member')
             .where('entity_id', '=', id)
             .orderBy('timestamp', 'desc')
+            .limit(limit)
+            .offset(offset)
             .execute();
-
-        const total = entries.length;
-        const offset = (page - 1) * limit;
-        const paginated = entries.slice(offset, offset + limit);
 
         return c.json({
             success: true,
-            data: paginated,
+            data: entries,
             meta: {
-                count: paginated.length,
-                total,
+                count: entries.length,
+                total: totalCount,
                 page,
                 limit,
-                totalPages: Math.ceil(total / limit),
+                totalPages: Math.ceil(totalCount / limit),
             }
         });
     } catch (error) {
@@ -1118,27 +1135,35 @@ memberRoutes.get('/:id/activity-log', enforcePermission('audit', 'read'), async 
             throw new NotFoundError('Member', id);
         }
 
+        const total = await db
+            .selectFrom('activity_log')
+            .select(db.fn.countAll().as('count'))
+            .where('entity_type', '=', 'member')
+            .where('entity_id', '=', id)
+            .executeTakeFirst();
+
+        const totalCount = Number(total?.count || 0);
+        const offset = (page - 1) * limit;
+
         const entries = await db
             .selectFrom('activity_log')
             .selectAll()
             .where('entity_type', '=', 'member')
             .where('entity_id', '=', id)
             .orderBy('timestamp', 'desc')
+            .limit(limit)
+            .offset(offset)
             .execute();
-
-        const total = entries.length;
-        const offset = (page - 1) * limit;
-        const paginated = entries.slice(offset, offset + limit);
 
         return c.json({
             success: true,
-            data: paginated,
+            data: entries,
             meta: {
-                count: paginated.length,
-                total,
+                count: entries.length,
+                total: totalCount,
                 page,
                 limit,
-                totalPages: Math.ceil(total / limit),
+                totalPages: Math.ceil(totalCount / limit),
             }
         });
     } catch (error) {

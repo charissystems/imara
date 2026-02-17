@@ -43,11 +43,15 @@ export const corsMiddleware = honoCors({
         // Check if origin is in allowed list
         if (allowedOrigins.includes(origin)) return origin;
         
-        // In development, allow all localhost and local domain origins
+        // In development, allow strict localhost origins only
         if (process.env.NODE_ENV !== 'production') {
-            if (origin.includes('localhost')) return origin;
+            if (/^https?:\/\/localhost(:\d+)?$/.test(origin)) return origin;
             const baseDomain = process.env.BASE_DOMAIN || '';
-            if (baseDomain && origin.includes(baseDomain)) return origin;
+            if (baseDomain) {
+                const escaped = baseDomain.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const domainPattern = new RegExp(`^https?://([a-z0-9-]+\\.)?${escaped}(:\\d+)?$`);
+                if (domainPattern.test(origin)) return origin;
+            }
         }
         
         // Check for tenant subdomain pattern in production

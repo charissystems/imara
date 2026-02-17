@@ -5,14 +5,29 @@
  * Tokens are stored with a TTL matching their remaining validity so the
  * blacklist is self-cleaning.
  *
- * When Redis is unavailable the service degrades gracefully — tokens are
- * treated as valid (fail-open) to avoid locking out all users.
+ * When Redis is unavailable the service falls back to an in-memory blacklist
+ * to ensure revoked tokens are still rejected (fail-closed).
  */
 
 import { getCacheRedis, isRedisAvailable } from '../config/redis';
 import { appLogger } from '../middleware/logger';
 
 const BLACKLIST_PREFIX = 'token:blacklist:';
+
+/**
+ * In-memory fallback blacklist for when Redis is unavailable.
+ * Auto-cleans expired entries every 60 seconds.
+ */
+const memoryBlacklist = new Map<string, number>(); // hash → expiresAt (ms)
+
+setInterval(() => {
+    const now = Date.now();
+    for (const [key, expiresAt] of memoryBlacklist) {
+        if (expiresAt <= now) {
+            memoryBlacklist.delete(key);
+        }
+    }
+}, 60_000).unref();
 
 /**
  * Hash the token to avoid storing raw JWTs in Redis.
@@ -29,38 +44,52 @@ async function tokenHash(token: string): Promise<string> {
  * @param expUnix Token `exp` claim (Unix seconds) — used to compute TTL
  */
 export async function blacklistToken(token: string, expUnix: number): Promise<void> {
+    const hash = await tokenHash(token);
+    const ttlMs = Math.max(1000, (expUnix - Math.floor(Date.now() / 1000)) * 1000);
+
+    // Always write to in-memory fallback
+    memoryBlacklist.set(hash, Date.now() + ttlMs);
+
     if (!isRedisAvailable()) {
-        appLogger.warn('Redis unavailable — token blacklist write skipped');
+        appLogger.warn('Redis unavailable — token blacklisted in memory only');
         return;
     }
 
     try {
         const redis = getCacheRedis();
-        const hash = await tokenHash(token);
-        const ttl = Math.max(1, expUnix - Math.floor(Date.now() / 1000));
-        await redis.set(`${BLACKLIST_PREFIX}${hash}`, '1', 'EX', ttl);
+        const ttlSec = Math.max(1, expUnix - Math.floor(Date.now() / 1000));
+        await redis.set(`${BLACKLIST_PREFIX}${hash}`, '1', 'EX', ttlSec);
     } catch (err) {
-        appLogger.error('Failed to blacklist token', err as Error);
+        appLogger.error('Failed to blacklist token in Redis (in-memory fallback active)', err as Error);
     }
 }
 
 /**
  * Check whether a token has been revoked.
- * Returns `false` (not blacklisted) when Redis is unavailable.
+ * Checks both Redis and in-memory fallback (fail-closed).
  */
 export async function isTokenBlacklisted(token: string): Promise<boolean> {
+    const hash = await tokenHash(token);
+
+    // Always check in-memory fallback first
+    const memoryEntry = memoryBlacklist.get(hash);
+    if (memoryEntry && memoryEntry > Date.now()) {
+        return true;
+    }
+
     if (!isRedisAvailable()) {
+        // Redis down — rely on in-memory (which we already checked)
         return false;
     }
 
     try {
         const redis = getCacheRedis();
-        const hash = await tokenHash(token);
         const result = await redis.get(`${BLACKLIST_PREFIX}${hash}`);
         return result !== null;
     } catch (err) {
         appLogger.error('Failed to check token blacklist', err as Error);
-        return false;
+        // Fail closed: if we can't verify, treat as blacklisted for safety
+        return true;
     }
 }
 

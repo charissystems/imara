@@ -82,6 +82,8 @@ export class MemberRepository extends BaseRepository {
 	 * Search Members by Name, Email, Phone, or Member Number
 	 */
 	async search(query: string) {
+		// Escape LIKE pattern characters to prevent pattern injection
+		const escaped = query.replace(/[%_\\]/g, '\\$&');
 		return this.executeSafely(
 			() => this.db
 				.selectFrom('members')
@@ -97,11 +99,11 @@ export class MemberRepository extends BaseRepository {
 				.where('deleted_at', 'is', null)
 				.where((eb) =>
 					eb.or([
-						eb('member_number', 'ilike', `%${query}%`),
-						eb('first_name', 'ilike', `%${query}%`),
-						eb('last_name', 'ilike', `%${query}%`),
-						eb('email', 'ilike', `%${query}%`),
-						eb('phone', 'ilike', `%${query}%`),
+						eb('member_number', 'ilike', `%${escaped}%`),
+						eb('first_name', 'ilike', `%${escaped}%`),
+						eb('last_name', 'ilike', `%${escaped}%`),
+						eb('email', 'ilike', `%${escaped}%`),
+						eb('phone', 'ilike', `%${escaped}%`),
 					])
 				)
 				.orderBy('created_at', 'desc')

@@ -56,8 +56,9 @@ export class AuthService {
 
     /**
      * Hash a password using bcrypt with configurable cost
+     * OWASP recommends minimum cost of 12 for bcrypt
      */
-    async hashPassword(password: string, cost: number = 10): Promise<string> {
+    async hashPassword(password: string, cost: number = 12): Promise<string> {
         const salt = await bcrypt.genSalt(cost);
         return bcrypt.hash(password, salt);
     }
@@ -315,10 +316,10 @@ export class AuthService {
         const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
         let token = '';
         const crypto = require('crypto');
-        const randomBytes = crypto.randomBytes(length);
         
+        // Use crypto.randomInt for unbiased index selection (no modulo bias)
         for (let i = 0; i < length; i++) {
-            token += chars.charAt(randomBytes[i] % chars.length);
+            token += chars.charAt(crypto.randomInt(chars.length));
         }
         return token;
     }

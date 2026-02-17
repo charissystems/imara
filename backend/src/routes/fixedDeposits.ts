@@ -460,7 +460,7 @@ fixedDepositRoutes.post('/:depositId/withdraw', validate(prematureWithdrawalSche
  * GET /fixed-deposits/:depositId/certificate
  * Get FD certificate data
  */
-fixedDepositRoutes.get('/:depositId/certificate', async (c) => {
+fixedDepositRoutes.get('/:depositId/certificate', enforcePermission('fixed_deposits', 'read'), async (c) => {
     try {
         const { depositId } = c.req.param();
         const db = c.get('db')!;
@@ -528,7 +528,7 @@ fixedDepositRoutes.get('/:depositId/certificate', async (c) => {
  * GET /fixed-deposits/:depositId/alerts
  * Get maturity alerts for an FD
  */
-fixedDepositRoutes.get('/:depositId/alerts', async (c) => {
+fixedDepositRoutes.get('/:depositId/alerts', enforcePermission('fixed_deposits', 'read'), async (c) => {
     try {
         const { depositId } = c.req.param();
         const db = c.get('db')!;
@@ -966,7 +966,7 @@ fixedDepositRoutes.get('/analytics', enforcePermission('fixed_deposits', 'read')
  * GET /fixed-deposits/:depositId/interest-preview
  * Preview interest calculation for an FD
  */
-fixedDepositRoutes.get('/:depositId/interest-preview', async (c) => {
+fixedDepositRoutes.get('/:depositId/interest-preview', enforcePermission('fixed_deposits', 'read'), async (c) => {
     try {
         const { depositId } = c.req.param();
         const db = c.get('db')!;
@@ -1040,7 +1040,7 @@ fixedDepositRoutes.get('/:depositId/interest-preview', async (c) => {
  * GET /fixed-deposits/:depositId/interest-breakdown
  * Get detailed interest breakdown by period
  */
-fixedDepositRoutes.get('/:depositId/interest-breakdown', async (c) => {
+fixedDepositRoutes.get('/:depositId/interest-breakdown', enforcePermission('fixed_deposits', 'read'), async (c) => {
     try {
         const { depositId } = c.req.param();
         const db = c.get('db')!;
@@ -1254,7 +1254,10 @@ fixedDepositRoutes.post('/:depositId/rollover', async (c) => {
         }
 
         const body = await c.req.json().catch(() => ({}));
-        const rolloverType = body.rollover_type || 'principal_only';
+        const rolloverType: 'principal_only' | 'principal_plus_interest' =
+            body.rollover_type === 'principal_plus_interest'
+                ? 'principal_plus_interest'
+                : 'principal_only';
 
         // Get FD
         const fd = await db
@@ -1382,7 +1385,7 @@ fixedDepositRoutes.post('/:depositId/rollover', async (c) => {
  * GET /fixed-deposits/products/:productId/analytics
  * Get analytics for a specific FD product
  */
-fixedDepositRoutes.get('/products/:productId/analytics', async (c) => {
+fixedDepositRoutes.get('/products/:productId/analytics', enforcePermission('fixed_deposits', 'read'), async (c) => {
     try {
         const { productId } = c.req.param();
         const db = c.get('db')!;
@@ -1440,7 +1443,7 @@ fixedDepositRoutes.get('/products/:productId/analytics', async (c) => {
  * Get FD details with interest schedule
  * NOTE: This route must be defined AFTER all specific routes to avoid conflicts
  */
-fixedDepositRoutes.get('/:depositId', async (c) => {
+fixedDepositRoutes.get('/:depositId', enforcePermission('fixed_deposits', 'read'), async (c) => {
     try {
         const { depositId } = c.req.param();
         const db = c.get('db')!;
