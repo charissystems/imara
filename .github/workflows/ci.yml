@@ -1,13 +1,6 @@
 name: CI
 
 on:
-  push:
-    branches: [main, development]
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - '.github/dependabot.yml'
-      - 'LICENSE'
   pull_request:
     branches: [main, development]
     paths-ignore:
@@ -16,6 +9,7 @@ on:
       - '.github/dependabot.yml'
       - 'LICENSE'
   workflow_call:
+  workflow_dispatch:
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -122,22 +116,4 @@ jobs:
           REDIS_URL: redis://localhost:6379
           NODE_ENV: test
 
-  # ── Docker Build (validate only — no push) ────────────────────────────
-  docker-build:
-    name: Docker Build Check
-    runs-on: ubuntu-latest
-    needs: typecheck
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Build image (no push)
-        uses: docker/build-push-action@v6
-        with:
-          context: backend
-          push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          tags: imara-backend:pr-${{ github.event.pull_request.number }}

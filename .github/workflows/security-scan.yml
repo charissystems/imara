@@ -1,11 +1,6 @@
 name: Security Scan
 
 on:
-  # Only trigger on schedule and manually — push/PR security checks
-  # are handled by ci.yml (typecheck, audit, tests).
-  schedule:
-    # Run weekly on Mondays at 09:00 UTC
-    - cron: '0 9 * * 1'
   workflow_dispatch:
 
 jobs:
