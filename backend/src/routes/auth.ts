@@ -145,17 +145,16 @@ authRoutes.post('/login', loginRateLimit, validate(loginSchema), async (c) => {
 
         // Check if 2FA is enabled
         if (credentials.two_factor_enabled) {
-            // Return a limited-scope token that can ONLY be used at /auth/2fa/verify
+            // Return a limited-scope token that can ONLY be used at /auth/2fa/verify.
+            // Do NOT include staff.id / staff.email in the response — returning user
+            // details before the second factor is verified leaks account existence
+            // to attackers who have guessed a valid password.
             const tempToken = await authService.generate2faPendingToken(staff, c.get('tenant')!.id);
             return c.json({
                 success: true,
                 data: {
                     requiresTwoFactor: true,
                     tempToken,
-                    staff: {
-                        id: staff.id,
-                        email: staff.email,
-                    },
                 },
                 meta: {
                     message: 'Two-factor authentication required',
@@ -339,10 +338,23 @@ authRoutes.post('/refresh', refreshRateLimit, async (c) => {
         const tenantId = payload.tenantId || c.get('tenant')!.id;
         const newAccessToken = await authService.generateAccessToken(staff, staffRole, tenantId);
 
+        // Refresh token rotation: issue a new refresh token and invalidate the old one.
+        // Without rotation a stolen refresh token is valid for its entire 7-day lifetime.
+        const newRefreshToken = await authService.generateRefreshToken(staff, tenantId);
+        if (payload.exp) {
+            await blacklistToken(refreshToken, payload.exp).catch(() => {
+                // Non-fatal: log but don't block the response
+                appLogger.warn('Failed to blacklist old refresh token during rotation', {
+                    staffId: payload.staffId,
+                });
+            });
+        }
+
         return c.json({
             success: true,
             data: {
                 accessToken: newAccessToken,
+                refreshToken: newRefreshToken,
             },
             meta: {
                 tokenExpiresIn: `${authService.getTokenExpirationMinutes()}m`,

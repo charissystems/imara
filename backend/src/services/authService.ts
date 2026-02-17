@@ -346,11 +346,12 @@ export class AuthService {
     generateResetToken(length: number = 32): string {
         const chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
         let token = '';
-        const crypto = require('crypto');
-        
-        // Use crypto.randomInt for unbiased index selection (no modulo bias)
+
+        // Use the randomInt already imported at the top of this file.
+        // require('crypto') was previously used here which throws in ESM
+        // ("type":"module") context — randomInt is the proper ESM equivalent.
         for (let i = 0; i < length; i++) {
-            token += chars.charAt(crypto.randomInt(chars.length));
+            token += chars.charAt(randomInt(chars.length));
         }
         return token;
     }

@@ -87,14 +87,44 @@ async function incrementCounter(
 
 /**
  * Extract client identifier for rate limiting.
- * Uses X-Forwarded-For (if behind proxy), falls back to remote address.
+ *
+ * IP header trust is controlled by TRUSTED_PROXY_COUNT (default: 0).
+ * Set to the number of reverse-proxy hops in front of the app.
+ *
+ *   TRUSTED_PROXY_COUNT=0  — no proxy; ignore X-Forwarded-For (default)
+ *   TRUSTED_PROXY_COUNT=1  — one nginx/load-balancer in front; use the
+ *                            rightmost IP in X-Forwarded-For (the real
+ *                            client IP added by the trusted proxy) and
+ *                            fall back to X-Real-IP
+ *
+ * Why rightmost? Each proxy *appends* the connecting client's IP. The
+ * leftmost entry is client-supplied and trivially spoofable. The entry
+ * at position (n - TRUSTED_PROXY_COUNT) was added by the final trusted
+ * hop and cannot be forged by the end client.
+ *
+ * Example (TRUSTED_PROXY_COUNT=1, attacker sets X-Forwarded-For: 1.2.3.4):
+ *   Nginx appends real IP → X-Forwarded-For: 1.2.3.4, 5.6.7.8
+ *   We take index (2 - 1) = 1 → 5.6.7.8 ✓
  */
 function getClientId(c: Context): string {
-    const forwarded = c.req.header('x-forwarded-for');
-    if (forwarded) {
-        return forwarded.split(',')[0].trim();
+    const proxyCount = parseInt(process.env.TRUSTED_PROXY_COUNT ?? '0', 10);
+
+    if (proxyCount > 0) {
+        const forwarded = c.req.header('x-forwarded-for');
+        if (forwarded) {
+            const ips = forwarded.split(',').map((ip) => ip.trim());
+            // Pick the IP inserted by the last trusted proxy
+            const idx = Math.max(0, ips.length - proxyCount);
+            const ip = ips[idx];
+            if (ip) return ip;
+        }
+        // X-Real-IP is set by nginx and reflects the real client IP
+        const realIp = c.req.header('x-real-ip');
+        if (realIp) return realIp;
     }
-    // Hono doesn't expose remoteAddress directly; use a header-based fallback
+
+    // No trusted proxy — fall back to a stable request fingerprint.
+    // Hono doesn't expose remoteAddress on Node; combine what we have.
     return c.req.header('x-real-ip') || 'unknown';
 }
 
