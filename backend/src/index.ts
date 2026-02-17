@@ -1,10 +1,12 @@
 // src/index.ts
+import type { MiddlewareHandler } from 'hono';
 import { 
     createApp, errorHandler, logger, 
     tenantResolver, schemaContext, corsMiddleware, 
     authMiddleware, requestContext, auditMiddleware,
     cacheInvalidation, tenantIsolationCheck,
 } from './middleware';
+import type { Env } from './middleware';
 import { securityHeadersMiddleware } from './middleware/securityHeaders';
 import { dbManager } from './config/database';
 import superAdminRoutes from './routes/superAdmin'; // Platform Admin
@@ -26,7 +28,7 @@ const app = createApp();
 app.onError(errorHandler);
 app.use('*', logger);
 app.use('*', requestContext);
-app.use('*', securityHeadersMiddleware);
+app.use('*', securityHeadersMiddleware as MiddlewareHandler<Env>);
 
 if (process.env.ENABLE_CORS === 'true') {
     app.use('*', corsMiddleware);
