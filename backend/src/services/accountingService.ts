@@ -11,6 +11,7 @@
  * - ACC-009: Generate audit trail for all entries
  */
 
+import { nanoid } from 'nanoid';
 import { appLogger } from '../middleware/logger';
 
 /**
@@ -223,7 +224,7 @@ export class AccountingService {
         }
 
         const journalEntry: JournalEntry = {
-            id: `JE-${Date.now()}-${Math.random().toString(36).substring(7)}`,
+            id: `JE-${nanoid(12)}`,
             tenantId: '', // Will be set by caller
             entryDate: new Date(),
             reference,
@@ -282,6 +283,9 @@ export class AccountingService {
         channel: string,
         depositAccountCode: string // e.g., "1110" for Savings Account
     ): JournalEntry {
+        if (amount <= 0) {
+            throw new Error('Deposit amount must be positive');
+        }
         // Deposits increase member savings (asset) and are sourced from cash/bank
         const cashAccountCode = this.getCashAccountForChannel(channel);
 
@@ -321,6 +325,9 @@ export class AccountingService {
         amount: number,
         loanAccountCode: string = '2140'
     ): JournalEntry {
+        if (amount <= 0) {
+            throw new Error('Loan disbursement amount must be positive');
+        }
         // Loan disbursement reduces cash/bank and increases loan receivables
         return {
             id: `AUTO-${Date.now()}`,
@@ -356,6 +363,9 @@ export class AccountingService {
         loanId: string,
         interestAmount: number
     ): JournalEntry {
+        if (interestAmount <= 0) {
+            throw new Error('Interest amount must be positive');
+        }
         return {
             id: `AUTO-${Date.now()}`,
             tenantId: '', // Will be set by caller

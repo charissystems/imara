@@ -3,6 +3,7 @@ import { verify } from 'hono/jwt';
 import { Env } from './types';
 import { appLogger } from './logger';
 import { UnauthorizedError } from './errorHandler';
+import { isTokenBlacklisted } from '../services/tokenBlacklistService';
 
 /**
  * JWT authentication middleware
@@ -47,14 +48,37 @@ export async function authMiddleware(c: Context<Env>, next: Next) {
     }
 
     const token = authHeader.substring(7);
-    const jwtSecret = process.env.JWT_SECRET || 'your-secret-key';
+    const jwtSecret = process.env.JWT_SECRET;
+
+    if (!jwtSecret) {
+        appLogger.error('JWT_SECRET environment variable is not set');
+        return c.json(
+            {
+                success: false,
+                error: {
+                    code: 'SERVER_CONFIGURATION_ERROR',
+                    message: 'Authentication service is misconfigured',
+                },
+            },
+            500
+        );
+    }
 
     try {
         const payload = await verify(token, jwtSecret, 'HS256') as any;
 
-        // Validate token type (access or refresh)
+        // Reject refresh tokens and 2FA pending tokens from API access
         if (payload.type === 'refresh') {
             throw new Error('Refresh token cannot be used for API access');
+        }
+        if (payload.type === '2fa_pending') {
+            throw new Error('Two-factor authentication has not been completed');
+        }
+
+        // Check if token has been revoked (logout blacklist)
+        const blacklisted = await isTokenBlacklisted(token);
+        if (blacklisted) {
+            throw new Error('Token has been revoked');
         }
 
         // Set current user in context with full user info

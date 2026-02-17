@@ -1,4 +1,5 @@
 import bcrypt from 'bcryptjs';
+import { randomInt } from 'crypto';
 import { sign, verify } from 'hono/jwt';
 import { Staff, StaffCredentials } from '../database/types';
 import { appLogger } from '../middleware/logger';
@@ -15,7 +16,7 @@ export interface AuthJWTPayload extends Record<string, unknown> {
     requiresTwoFactor?: boolean;
     iat: number;
     exp: number;
-    type?: 'access' | 'refresh';
+    type?: 'access' | 'refresh' | '2fa_pending';
 }
 
 /**
@@ -38,8 +39,15 @@ export class AuthService {
     private maxFailedAttempts: number = 5;
     private accountLockoutDurationMinutes: number = 15;
 
-    constructor(jwtSecret: string = process.env.JWT_SECRET || 'your-secret-key') {
-        this.jwtSecret = jwtSecret;
+    constructor(jwtSecret?: string) {
+        const secret = jwtSecret ?? process.env.JWT_SECRET;
+        if (!secret) {
+            throw new Error(
+                'JWT_SECRET environment variable is required. ' +
+                'Set a strong secret (>=32 characters) before starting the server.'
+            );
+        }
+        this.jwtSecret = secret;
     }
 
     // ──────────────────────────────────────────────────────────
@@ -161,6 +169,32 @@ export class AuthService {
     }
 
     /**
+     * Generate a short-lived 2FA pending token.
+     * This token has type '2fa_pending' and 5-minute expiry.
+     * It CANNOT be used for normal API access.
+     */
+    async generate2faPendingToken(
+        staff: Staff,
+        tenantId?: string
+    ): Promise<string> {
+        const now = Math.floor(Date.now() / 1000);
+        const expirationSeconds = 5 * 60; // 5 minutes
+
+        const payload: AuthJWTPayload = {
+            staffId: staff.id,
+            staffEmail: staff.email,
+            staffNumber: staff.staff_number,
+            tenantId,
+            requiresTwoFactor: true,
+            type: '2fa_pending',
+            iat: now,
+            exp: now + expirationSeconds,
+        };
+
+        return await sign(payload, this.jwtSecret, 'HS256');
+    }
+
+    /**
      * Refresh an access token using a refresh token
      */
     async refreshAccessToken(staff: Staff, role?: string, tenantId?: string): Promise<string> {
@@ -179,7 +213,7 @@ export class AuthService {
         const digits = '0123456789';
         let otp = '';
         for (let i = 0; i < length; i++) {
-            otp += digits.charAt(Math.floor(Math.random() * 10));
+            otp += digits.charAt(randomInt(10));
         }
         return otp;
     }

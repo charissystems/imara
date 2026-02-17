@@ -8,6 +8,7 @@ import { ValidationError, NotFoundError, UnauthorizedError } from '../middleware
 import { AccountRepository } from '../repositories/accountRepository';
 import { SavingsService } from '../services/savingsService';
 import { hasPermission, enforcePermission } from '../middleware/rbac';
+import { getPool } from '../config/database';
 
 export const accountRoutes = new Hono<Env>();
 
@@ -360,10 +361,12 @@ accountRoutes.post('/deposit', validate(depositSchema), async (c) => {
             recorded_by: currentUser?.id || null,
         } as any);
 
-        // Update account balance
-        const newBalance = Number(account.principal_balance) + data.amount;
+        // Update account balance using Decimal for precision
+        const currentBalance = new Decimal(account.principal_balance?.toString() ?? '0');
+        const depositAmount = new Decimal(data.amount);
+        const newBalance = currentBalance.plus(depositAmount);
         const updatedAccount = await accountRepo.update(data.savings_account_id, {
-            principal_balance: String(newBalance),
+            principal_balance: newBalance.toString(),
         } as any);
 
         return c.json({
@@ -426,8 +429,9 @@ accountRoutes.post('/withdrawal', validate(withdrawalSchema), async (c) => {
         }
 
         // Validate sufficient balance
-        const currentBalance = Number(account.principal_balance);
-        if (data.amount > currentBalance) {
+        const currentBalance = new Decimal(account.principal_balance?.toString() ?? '0');
+        const withdrawalAmount = new Decimal(data.amount);
+        if (withdrawalAmount.gt(currentBalance)) {
             return c.json({
                 success: false,
                 error: { code: 'INSUFFICIENT_FUNDS', message: 'Insufficient balance' }
@@ -452,10 +456,11 @@ accountRoutes.post('/withdrawal', validate(withdrawalSchema), async (c) => {
             requested_by: currentUser?.id || null,
         } as any);
 
-        // If no approval required, update balance immediately
+        // If no approval required, update balance immediately using Decimal
         if (!requiresApproval) {
+            const newBalance = currentBalance.minus(withdrawalAmount);
             await accountRepo.update(data.savings_account_id, {
-                principal_balance: String(currentBalance - data.amount),
+                principal_balance: newBalance.toString(),
             } as any);
         }
 
@@ -507,12 +512,32 @@ accountRoutes.patch('/withdrawals/:withdrawalId/approve', async (c) => {
             approved_at: new Date(),
         } as any);
 
-        // Update account balance
+        // Re-check balance at approval time to prevent negative balances
         const account = await accountRepo.findById(withdrawal.savings_account_id);
         if (account) {
-            const newBalance = Number(account.principal_balance) - Number(withdrawal.amount);
+            const currentBalance = new Decimal(account.principal_balance?.toString() ?? '0');
+            const withdrawalAmount = new Decimal(withdrawal.amount?.toString() ?? '0');
+
+            if (withdrawalAmount.gt(currentBalance)) {
+                // Revert approval — insufficient funds at time of approval
+                await accountRepo.updateWithdrawal(withdrawalId, {
+                    status: 'pending',
+                    approved_by: null,
+                    approved_at: null,
+                } as any);
+
+                return c.json({
+                    success: false,
+                    error: {
+                        code: 'INSUFFICIENT_FUNDS',
+                        message: `Insufficient balance. Available: ${currentBalance.toFixed(2)}, Withdrawal: ${withdrawalAmount.toFixed(2)}`,
+                    },
+                }, 400);
+            }
+
+            const newBalance = currentBalance.minus(withdrawalAmount);
             await accountRepo.update(withdrawal.savings_account_id, {
-                principal_balance: String(newBalance),
+                principal_balance: newBalance.toString(),
             } as any);
         }
 
@@ -586,14 +611,23 @@ accountRoutes.post('/transfer', validate(transferSchema), async (c) => {
             throw new NotFoundError('Account', 'One or both accounts not found');
         }
 
+        // Prevent self-transfers (could create money due to non-atomic read/write)
+        if (data.from_account_id === data.to_account_id) {
+            return c.json({
+                success: false,
+                error: { code: 'INVALID_TRANSFER', message: 'Cannot transfer to the same account' }
+            }, 400);
+        }
+
         // Authorization
         if (currentUser?.role === 'member' && fromAccount.member_id !== currentUser.id) {
             throw new UnauthorizedError('Cannot transfer from other members\' accounts');
         }
 
-        // Validate sufficient balance
-        const fromBalance = Number(fromAccount.principal_balance);
-        if (fromBalance < data.amount) {
+        // Validate sufficient balance using Decimal
+        const fromBalance = new Decimal(fromAccount.principal_balance?.toString() ?? '0');
+        const transferAmount = new Decimal(data.amount);
+        if (fromBalance.lt(transferAmount)) {
             return c.json({
                 success: false,
                 error: { code: 'INSUFFICIENT_FUNDS', message: 'Insufficient balance' }
@@ -614,14 +648,14 @@ accountRoutes.post('/transfer', validate(transferSchema), async (c) => {
             initiated_by: currentUser?.id || null,
         } as any);
 
-        // Update both account balances
-        const toBalance = Number(toAccount.principal_balance);
+        // Update both account balances using Decimal for precision
+        const toBalance = new Decimal(toAccount.principal_balance?.toString() ?? '0');
         await accountRepo.update(data.from_account_id, {
-            principal_balance: String(fromBalance - data.amount),
+            principal_balance: fromBalance.minus(transferAmount).toString(),
         } as any);
 
         await accountRepo.update(data.to_account_id, {
-            principal_balance: String(toBalance + data.amount),
+            principal_balance: toBalance.plus(transferAmount).toString(),
         } as any);
 
         return c.json({
@@ -763,44 +797,66 @@ accountRoutes.post('/batch-deposit', validate(batchDepositSchema), async (c) => 
         const results: Array<{ depositNumber: string; accountId: string; amount: number; status: string }> = [];
         const errors: Array<{ index: number; accountId: string; error: string }> = [];
 
-        for (let i = 0; i < data.deposits.length; i++) {
-            const item = data.deposits[i];
-            try {
-                const account = await accountRepo.findById(item.savings_account_id);
-                if (!account) {
-                    errors.push({ index: i, accountId: item.savings_account_id, error: 'Account not found' });
-                    continue;
+        // Process batch deposits inside a database transaction for atomicity
+        const pool = getPool();
+        const client = await pool.connect();
+
+        try {
+            await client.query('BEGIN');
+
+            for (let i = 0; i < data.deposits.length; i++) {
+                const item = data.deposits[i];
+                try {
+                    const account = await accountRepo.findById(item.savings_account_id);
+                    if (!account) {
+                        errors.push({ index: i, accountId: item.savings_account_id, error: 'Account not found' });
+                        continue;
+                    }
+
+                    const depositNumber = savingsService.generateTransactionReference();
+                    const deposit = await accountRepo.createDeposit({
+                        savings_account_id: item.savings_account_id,
+                        member_id: item.member_id,
+                        deposit_number: depositNumber,
+                        amount: String(item.amount),
+                        deposit_date: new Date(),
+                        payment_method: item.payment_method,
+                        payment_reference: item.payment_reference || null,
+                        status: 'posted',
+                        description: item.description || 'Batch deposit',
+                        recorded_by: currentUser.id,
+                    } as any);
+
+                    const currentBalance = new Decimal(account.principal_balance?.toString() ?? '0');
+                    const depositAmount = new Decimal(item.amount);
+                    const newBalance = currentBalance.plus(depositAmount);
+                    await accountRepo.update(item.savings_account_id, {
+                        principal_balance: newBalance.toString(),
+                    } as any);
+
+                    results.push({
+                        depositNumber,
+                        accountId: item.savings_account_id,
+                        amount: item.amount,
+                        status: 'posted',
+                    });
+                } catch (error) {
+                    const errMsg = error instanceof Error ? error.message : 'Unknown error';
+                    errors.push({ index: i, accountId: item.savings_account_id, error: errMsg });
                 }
-
-                const depositNumber = savingsService.generateTransactionReference();
-                const deposit = await accountRepo.createDeposit({
-                    savings_account_id: item.savings_account_id,
-                    member_id: item.member_id,
-                    deposit_number: depositNumber,
-                    amount: String(item.amount),
-                    deposit_date: new Date(),
-                    payment_method: item.payment_method,
-                    payment_reference: item.payment_reference || null,
-                    status: 'posted',
-                    description: item.description || 'Batch deposit',
-                    recorded_by: currentUser.id,
-                } as any);
-
-                const newBalance = Number(account.principal_balance) + item.amount;
-                await accountRepo.update(item.savings_account_id, {
-                    principal_balance: String(newBalance),
-                } as any);
-
-                results.push({
-                    depositNumber,
-                    accountId: item.savings_account_id,
-                    amount: item.amount,
-                    status: 'posted',
-                });
-            } catch (error) {
-                const errMsg = error instanceof Error ? error.message : 'Unknown error';
-                errors.push({ index: i, accountId: item.savings_account_id, error: errMsg });
             }
+
+            // If no results at all, rollback; otherwise commit
+            if (results.length === 0 && errors.length > 0) {
+                await client.query('ROLLBACK');
+            } else {
+                await client.query('COMMIT');
+            }
+        } catch (txError) {
+            await client.query('ROLLBACK');
+            throw txError;
+        } finally {
+            client.release();
         }
 
         const totalDeposited = results.reduce((sum, r) => sum + r.amount, 0);
