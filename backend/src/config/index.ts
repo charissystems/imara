@@ -35,29 +35,29 @@ export async function initializeApp() {
         throw new Error(`Missing required environment variables: ${missingEnvs.join(', ')}`);
     }
 
-    console.log('✅ [CONFIG] All required environment variables present');
+    console.log('🟢 [INFO] [CONFIG] All required environment variables present');
 
     // Validate JWT secrets have minimum length
     if ((process.env.JWT_SECRET || '').length < 32) {
-        console.warn('⚠️  JWT_SECRET is less than 32 characters; should be longer for security');
+        console.warn('🟡 [WARN] JWT_SECRET is less than 32 characters; should be longer for security');
     }
 
     if ((process.env.REFRESH_TOKEN_SECRET || '').length < 32) {
-        console.warn('⚠️  REFRESH_TOKEN_SECRET is less than 32 characters; should be longer for security');
+        console.warn('🟡 [WARN] REFRESH_TOKEN_SECRET is less than 32 characters; should be longer for security');
     }
 
     // Validate ADMIN_SECRET_KEY if set
     const adminSecretKey = process.env.ADMIN_SECRET_KEY || '';
     if (adminSecretKey && adminSecretKey.length < 32) {
-        console.warn('⚠️  ADMIN_SECRET_KEY is less than 32 characters; should be longer for security');
+        console.warn('🟡 [WARN] ADMIN_SECRET_KEY is less than 32 characters; should be longer for security');
     }
     if (!adminSecretKey) {
-        console.warn('⚠️  ADMIN_SECRET_KEY is not set; super-admin endpoints will be inaccessible');
+        console.warn('🟡 [WARN] ADMIN_SECRET_KEY is not set; super-admin endpoints will be inaccessible');
     }
 
     // Warn about CORS in production
     if ((process.env.NODE_ENV || '') === 'production' && !process.env.ALLOWED_ORIGINS) {
-        console.warn('⚠️  ALLOWED_ORIGINS is not set in production; all browser CORS requests will be rejected');
+        console.warn('🟡 [WARN] ALLOWED_ORIGINS is not set in production; all browser CORS requests will be rejected');
     }
 
     return {

@@ -37,7 +37,7 @@ export class TenantService {
                 .execute();
         } catch (error) {
             // Log but don't fail the main operation
-            console.error('Failed to log audit event:', error);
+            console.error('🔴 [ERROR] Failed to log audit event:', error);
         }
     }
 
@@ -116,7 +116,7 @@ export class TenantService {
                 errorMsg
             );
 
-            console.error(`[TenantService] Failed to create tenant ${subdomain}.`, error);
+            console.error(`🔴 [ERROR] [TenantService] Failed to create tenant ${subdomain}.`, error);
             // Note: The SQL function has internal rollback logic at the database level,
             // so we don't need to manually cleanup the tenants row here.
             throw error;
@@ -151,7 +151,7 @@ export class TenantService {
             return await this.tenantRepo.findById(tenantId);
         } catch (error) {
             const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-            console.error(`[TenantService] Failed to soft-delete tenant ${tenantId}.`, error);
+            console.error(`🔴 [ERROR] [TenantService] Failed to soft-delete tenant ${tenantId}.`, error);
             throw error;
         }
     }
@@ -183,7 +183,7 @@ export class TenantService {
                 errorMsg
             );
 
-            console.error(`[TenantService] Failed to hard-delete tenant schema ${schemaName}.`, error);
+            console.error(`🔴 [ERROR] [TenantService] Failed to hard-delete tenant schema ${schemaName}.`, error);
             throw error;
         }
     }

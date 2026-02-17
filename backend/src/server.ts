@@ -11,13 +11,13 @@ const enableScheduler = process.env.ENABLE_JOB_SCHEDULER !== 'false';
 async function startServer() {
     try {
         // Run public migrations on startup to ensure registry and tenant engine are set up
-        console.log('🔧 Initializing database...');
+        console.log('� [INFO] Initializing database...');
         const migrationRunner = new MigrationRunner();
         await migrationRunner.runPublicMigrations();
-        console.log('✅ Database initialization complete.\n');
+        console.log('🟢 [INFO] Database initialization complete.\n');
     } catch (error) {
-        console.error('❌ Failed to initialize database:', error);
-        console.error('DATABASE MUST BE SET UP BEFORE SERVER CAN RUN');
+        console.error('🔴 [ERROR] Failed to initialize database:', error);
+        console.error('🔴 [ERROR] DATABASE MUST BE SET UP BEFORE SERVER CAN RUN');
         process.exit(1);
     }
 
@@ -25,22 +25,22 @@ async function startServer() {
     if (enableScheduler) {
         try {
             await startJobScheduler();
-            console.log('⏰ Job scheduler started');
+            console.log('🟣 [INFO] Job scheduler started');
         } catch (error) {
-            console.warn('⚠️  Job scheduler failed to start (Redis may be unavailable):', (error as Error).message);
-            console.warn('   Jobs can be triggered manually via the admin API.');
+            console.warn('🟡 [WARN] Job scheduler failed to start (Redis may be unavailable):', (error as Error).message);
+            console.warn('🟡 [WARN] Jobs can be triggered manually via the admin API.');
         }
     }
 
     // Eagerly initialize cache Redis connection (non-blocking)
     try {
         getCacheRedis();
-        console.log('🗄️  Redis cache initializing...');
+        console.log('🔵 [INFO] Redis cache initializing...');
     } catch {
-        console.warn('⚠️  Redis cache unavailable; application caching disabled');
+        console.warn('🟡 [WARN] Redis cache unavailable; application caching disabled');
     }
 
-    console.log(`🚀 Server starting on http://localhost:${port}`);
+    console.log(`🟢 [INFO] Server starting on http://localhost:${port}`);
 
     serve({
         fetch: app.fetch,
@@ -49,14 +49,14 @@ async function startServer() {
 }
 
 startServer().catch(error => {
-    console.error('Fatal error:', error);
+    console.error('🔴 [ERROR] Fatal error:', error);
     process.exit(1);
 });
 
 // Graceful shutdown
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.on(signal, async () => {
-        console.log(`\n${signal} received. Shutting down gracefully...`);
+        console.log(`\n🟠 [INFO] ${signal} received. Shutting down gracefully...`);
         try {
             await stopJobScheduler();
         } catch {

@@ -136,7 +136,7 @@ app.post('/tenants', async (c) => {
         }, 201);
     } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-        console.error('Failed to create tenant:', {
+        console.error('🔴 [ERROR] Failed to create tenant:', {
             message: errorMsg,
             code: data.code,
             error
@@ -151,7 +151,7 @@ app.post('/tenants', async (c) => {
 
         if (partialTenant) {
             // Tenant was created despite service error - return success
-            console.warn('Tenant was created despite service error, returning success');
+            console.warn('🟡 [WARN] Tenant was created despite service error, returning success');
             return c.json({
                 success: true,
                 message: 'Tenant created successfully',

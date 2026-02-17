@@ -27,18 +27,18 @@ export class MigrationRunner {
      * Runs migrations for the Public Schema (Global Registry)
      */
     async runPublicMigrations() {
-        console.log('🚀 Running Public Schema Migrations...');
+        console.log('� [INFO] Running Public Schema Migrations...');
         const files = await this.getSortedSqlFiles(this.publicMigrationsPath);
 
         if (files.length === 0) {
-            console.log('✨ No public migrations to run.');
+            console.log('🟠 [INFO] No public migrations to run.');
             return;
         }
 
         const client = await getPool().connect();
         try {
             for (const file of files) {
-                console.log(`  [PUBLIC] Executing ${file.name}`);
+                console.log(`🔵 [INFO] [PUBLIC] Executing ${file.name}`);
                 const sql = await fs.readFile(file.path, 'utf-8');
                 try {
                     await client.query(sql);
@@ -47,15 +47,15 @@ export class MigrationRunner {
                     // - 42P07: relation already exists
                     // - 42710: constraint already exists
                     if (error.code === '42P07' || error.code === '42710') {
-                        console.log(`  [PUBLIC] Skipping ${file.name} (already exists)`);
+                        console.log(`🟠 [INFO] [PUBLIC] Skipping ${file.name} (already exists)`);
                     } else {
                         throw error;
                     }
                 }
             }
-            console.log('✅ Public Schema Migrations Completed.');
+            console.log('🟢 [INFO] Public Schema Migrations Completed.');
         } catch (error) {
-            console.error('❌ Public Migration Failed:', error);
+            console.error('🔴 [ERROR] Public Migration Failed:', error);
             throw error;
         } finally {
             client.release();
@@ -71,11 +71,11 @@ export class MigrationRunner {
         // SECURITY: Validate schema name to prevent SQL injection
         validateSchemaName(schemaName);
         
-        console.log(`🏢 Running Tenant Migrations for schema: ${schemaName}`);
+        console.log(`🔵 [INFO] Running Tenant Migrations for schema: ${schemaName}`);
         const files = await this.getSortedSqlFiles(this.tenantMigrationsPath);
 
         if (files.length === 0) {
-            console.log('✨ No tenant migrations to run.');
+            console.log('🟠 [INFO] No tenant migrations to run.');
             return;
         }
 
@@ -92,7 +92,7 @@ export class MigrationRunner {
                 const result = await client.query(checkQuery, [tenantId, version]);
 
                 if (result.rows.length > 0) {
-                    console.log(`  [TENANT] Skipping ${file.name} (already applied)`);
+                    console.log(`🟠 [INFO] [TENANT] Skipping ${file.name} (already applied)`);
                     continue;
                 }
 
@@ -100,7 +100,7 @@ export class MigrationRunner {
                 await client.query('BEGIN');
 
                 try {
-                    console.log(`  [TENANT] Applying ${file.name}...`);
+                    console.log(`🔵 [INFO] [TENANT] Applying ${file.name}...`);
 
                     // 3. Set Search Path for this Transaction
                     // This directs subsequent queries to the tenant schema
@@ -117,12 +117,12 @@ export class MigrationRunner {
 
                     // 6. Commit Transaction
                     await client.query('COMMIT');
-                    console.log(`  [TENANT] ✅ Success ${file.name}`);
+                    console.log(`🟢 [INFO] [TENANT] Success ${file.name}`);
 
                 } catch (error) {
                     // Rollback on failure
                     await client.query('ROLLBACK');
-                    console.error(`  [TENANT] ❌ Failed ${file.name}`, error);
+                    console.error(`🔴 [ERROR] [TENANT] Failed ${file.name}`, error);
                     throw error; // Stop execution
                 }
             }
