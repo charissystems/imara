@@ -9,8 +9,10 @@ import { appLogger } from '../middleware/logger';
  */
 export interface AuthJWTPayload extends Record<string, unknown> {
     staffId: string;
-    staffEmail: string;
-    staffNumber: string;
+    /** @deprecated PII removed from tokens — look up from staffId server-side */
+    staffEmail?: string;
+    /** @deprecated PII removed from tokens — look up from staffId server-side */
+    staffNumber?: string;
     role?: string;
     tenantId?: string;
     requiresTwoFactor?: boolean;
@@ -128,8 +130,6 @@ export class AuthService {
 
         const payload: AuthJWTPayload = {
             staffId: staff.id,
-            staffEmail: staff.email,
-            staffNumber: staff.staff_number,
             role: role || 'staff',
             tenantId,
             requiresTwoFactor: requiresTwoFactor || false,
@@ -154,8 +154,6 @@ export class AuthService {
 
         const payload: AuthJWTPayload = {
             staffId: staff.id,
-            staffEmail: staff.email,
-            staffNumber: staff.staff_number,
             tenantId,
             type: 'refresh',
             iat: now,
@@ -207,8 +205,6 @@ export class AuthService {
 
         const payload: AuthJWTPayload = {
             staffId: staff.id,
-            staffEmail: staff.email,
-            staffNumber: staff.staff_number,
             tenantId,
             requiresTwoFactor: true,
             type: '2fa_pending',

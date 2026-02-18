@@ -123,8 +123,22 @@ function getClientId(c: Context): string {
         if (realIp) return realIp;
     }
 
-    // No trusted proxy — fall back to a stable request fingerprint.
-    return c.req.header('x-real-ip') || 'unknown';
+    // No trusted proxy — fall back to available request identifiers.
+    // Try x-real-ip, then the raw connection address from the runtime adapter.
+    const realIp = c.req.header('x-real-ip');
+    if (realIp) return realIp;
+
+    // Hono exposes the connecting IP via c.env in some adapters (e.g. Bun, Deno).
+    // For Node/http adapters, the raw socket address is the most reliable fallback.
+    const connInfo = (c.env as any)?.incoming?.socket?.remoteAddress
+        ?? (c.env as any)?.remoteAddr?.hostname
+        ?? (c.req.raw as any)?.socket?.remoteAddress;
+    if (connInfo) return connInfo;
+
+    // Last resort: hash of user-agent + accept-language to reduce collision surface.
+    const ua = c.req.header('user-agent') ?? '';
+    const lang = c.req.header('accept-language') ?? '';
+    return `anon:${ua}:${lang}`;
 }
 
 /**

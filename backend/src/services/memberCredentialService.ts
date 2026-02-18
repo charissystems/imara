@@ -50,7 +50,14 @@ export class MemberCredentialService {
     async verifyPin(memberId: string, pin: string): Promise<{ valid: boolean; locked: boolean }> {
         const cred = await this.db
             .selectFrom('member_credentials')
-            .selectAll()
+            .select([
+                'member_id',
+                'pin_hash',
+                'pin_salt',
+                'pin_attempts',
+                'max_attempts',
+                'is_locked',
+            ])
             .where('member_id', '=', memberId)
             .executeTakeFirst();
 

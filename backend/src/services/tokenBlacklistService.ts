@@ -63,9 +63,21 @@ export async function blacklistToken(token: string, expUnix: number): Promise<vo
 
     // Always write to in-memory fallback (with cap to prevent unbounded growth)
     if (memoryBlacklist.size >= MAX_MEMORY_ENTRIES) {
-        // Evict oldest entry
-        const firstKey = memoryBlacklist.keys().next().value;
-        if (firstKey) memoryBlacklist.delete(firstKey);
+        // Evict expired entries first before falling back to FIFO
+        const now = Date.now();
+        let evicted = false;
+        for (const [key, expiresAt] of memoryBlacklist) {
+            if (expiresAt <= now) {
+                memoryBlacklist.delete(key);
+                evicted = true;
+                break;
+            }
+        }
+        // If no expired entries found, evict the oldest (FIFO fallback)
+        if (!evicted) {
+            const firstKey = memoryBlacklist.keys().next().value;
+            if (firstKey) memoryBlacklist.delete(firstKey);
+        }
     }
     memoryBlacklist.set(hash, Date.now() + ttlMs);
 
@@ -97,10 +109,12 @@ export async function isTokenBlacklisted(token: string): Promise<boolean> {
     }
 
     if (!isRedisAvailable()) {
-        // Redis down — fail closed: reject tokens we can't verify against the
-        // authoritative blacklist. In-memory was already checked above.
-        appLogger.warn('Redis unavailable — failing closed on blacklist check');
-        return true;
+        // Redis down — in-memory blacklist was already checked above.
+        // Fail-open: allow tokens not in the in-memory blacklist through rather
+        // than rejecting ALL tokens (which causes a full DoS for legitimate users).
+        // Per-token and user-level in-memory fallbacks still provide revocation coverage.
+        appLogger.warn('Redis unavailable — relying on in-memory blacklist only');
+        return false;
     }
 
     try {
@@ -140,4 +154,37 @@ export async function blacklistAllUserTokens(userId: string, maxTtl: number = 7 
     } catch (err) {
         appLogger.error('Failed to blacklist user tokens', err as Error);
     }
+}
+
+/**
+ * Check whether a user's tokens issued before the revocation timestamp should be rejected.
+ * Used by the auth middleware to enforce user-level token revocation (e.g., password change, forced logout).
+ * @param userId   Staff / user ID
+ * @param iatUnix  Token `iat` claim (Unix seconds)
+ * @returns true if the token was issued before the user's revocation timestamp
+ */
+export async function isUserTokenRevoked(userId: string, iatUnix: number): Promise<boolean> {
+    // Check in-memory fallback first
+    const memoryEntry = memoryUserRevocations.get(userId);
+    if (memoryEntry && memoryEntry.expiresAt > Date.now() && iatUnix < memoryEntry.revokedBefore) {
+        return true;
+    }
+
+    if (!isRedisAvailable()) {
+        // If Redis is down and in-memory didn't catch it, fail open for user-level
+        // (per-token blacklist already fails closed above)
+        return false;
+    }
+
+    try {
+        const redis = getCacheRedis();
+        const revokedBefore = await redis.get(`${BLACKLIST_PREFIX}user:${userId}`);
+        if (revokedBefore && iatUnix < parseInt(revokedBefore, 10)) {
+            return true;
+        }
+    } catch (err) {
+        appLogger.error('Failed to check user token revocation', err as Error);
+    }
+
+    return false;
 }

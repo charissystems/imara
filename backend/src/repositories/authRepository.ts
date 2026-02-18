@@ -1,5 +1,6 @@
 import { StaffCredentials, NewStaffCredentials, StaffCredentialsUpdate } from '../database/types';
 import { BaseRepository } from './baseRepository';
+import { sql } from 'kysely';
 
 /**
  * Repository for staff authentication credentials.
@@ -34,9 +35,22 @@ export class AuthRepository extends BaseRepository {
         return this.executeSafely(
             () => this.db
                 .selectFrom('staff_credentials')
-                .selectAll()
+                .select([
+                    'id',
+                    'staff_id',
+                    'password_hash',
+                    'password_changed_at',
+                    'two_factor_enabled',
+                    'account_locked',
+                    'failed_login_attempts',
+                    'locked_until',
+                    'last_login_at',
+                    'last_login_ip',
+                    'created_at',
+                    'updated_at',
+                ])
                 .where('staff_id', '=', staffId)
-                .executeTakeFirst(),
+                .executeTakeFirst() as any,
             'findByStaffId',
             { staffId }
         );
@@ -97,9 +111,9 @@ export class AuthRepository extends BaseRepository {
             () => this.db
                 .updateTable('staff_credentials')
                 .set({
-                    failed_login_attempts: (current.failed_login_attempts || 0) + 1,
+                    failed_login_attempts: sql`COALESCE(failed_login_attempts, 0) + 1`,
                     updated_at: new Date(),
-                })
+                } as any)
                 .where('staff_id', '=', staffId)
                 .returningAll()
                 .executeTakeFirstOrThrow(),

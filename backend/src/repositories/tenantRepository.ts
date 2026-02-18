@@ -21,7 +21,7 @@ export class TenantRepository {
             const errorMessage = error instanceof Error ? error.message : 'Unknown database error';
             const details = {
                 operation: operationName,
-                originalError: errorMessage,
+                ...(process.env.NODE_ENV !== 'production' && { originalError: errorMessage }),
                 ...context,
             };
             throw new DatabaseError(`${operationName} failed: ${errorMessage}`, details);

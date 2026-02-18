@@ -3,7 +3,7 @@ import { verify } from 'hono/jwt';
 import { Env } from './types';
 import { appLogger } from './logger';
 import { UnauthorizedError } from './errorHandler';
-import { isTokenBlacklisted } from '../services/tokenBlacklistService';
+import { isTokenBlacklisted, isUserTokenRevoked } from '../services/tokenBlacklistService';
 
 /**
  * JWT authentication middleware
@@ -82,11 +82,21 @@ export async function authMiddleware(c: Context<Env>, next: Next) {
             throw new Error('Token has been revoked');
         }
 
+        // Check if all tokens for this user were revoked (password change, forced logout)
+        if (payload.staffId && payload.iat) {
+            const userRevoked = await isUserTokenRevoked(payload.staffId, payload.iat);
+            if (userRevoked) {
+                throw new Error('All tokens for this user have been revoked');
+            }
+        }
+
         // Set current user in context with full user info
+        // Note: email and staffNumber are NOT in the JWT (PII removed).
+        // They should be looked up from the database if needed.
         const userInfo = {
             id: payload.staffId,
-            email: payload.staffEmail,
-            staffNumber: payload.staffNumber,
+            email: payload.staffEmail || '',
+            staffNumber: payload.staffNumber || '',
             role: payload.role || 'staff',
             staffId: payload.staffId,
             tenant_id: payload.tenantId,
