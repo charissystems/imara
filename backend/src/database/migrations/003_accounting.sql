@@ -247,3 +247,24 @@ CREATE TABLE IF NOT EXISTS template.trial_balance (
 
 CREATE INDEX IF NOT EXISTS trial_balance_period_idx ON template.trial_balance(financial_period_id);
 CREATE INDEX IF NOT EXISTS trial_balance_account_idx ON template.trial_balance(account_id);
+
+-- ─────────────────────────────────────────────────────────────────────
+-- PERFORMANCE INDEXES
+-- ─────────────────────────────────────────────────────────────────────
+
+-- GL postings: accounting report queries by account + date
+CREATE INDEX IF NOT EXISTS idx_gl_postings_account_date
+    ON template.gl_postings(account_code, posting_date);
+
+-- Transactions: date-range + type filtering (most report queries)
+CREATE INDEX IF NOT EXISTS idx_transactions_date_type
+    ON template.transactions(transaction_date, transaction_type, status)
+    WHERE deleted_at IS NULL;
+
+-- Transactions: per-account statement queries
+CREATE INDEX IF NOT EXISTS idx_transactions_account_date
+    ON template.transactions(related_account_id, transaction_date DESC)
+    WHERE deleted_at IS NULL;
+
+-- Statistics targets
+ALTER TABLE template.transactions ALTER COLUMN transaction_date SET STATISTICS 1000;

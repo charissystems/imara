@@ -128,6 +128,18 @@ CREATE TABLE IF NOT EXISTS template.staff_credentials (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS staff_credentials_staff_idx ON template.staff_credentials(staff_id);
+
+-- ─────────────────────────────────────────────────────────────────────
+-- PERFORMANCE INDEXES
+-- ─────────────────────────────────────────────────────────────────────
+
+-- Active staff lookups (status-based filtering is very common)
+CREATE INDEX IF NOT EXISTS idx_staff_active
+    ON template.staff(status, staff_number)
+    WHERE status = 'active';
+
+-- Staff statistics targets for query planner
+ALTER TABLE template.staff ALTER COLUMN status SET STATISTICS 500;
 -- MEMBER CREDENTIALS (PINs for member self-service)
 CREATE TABLE IF NOT EXISTS template.member_credentials (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

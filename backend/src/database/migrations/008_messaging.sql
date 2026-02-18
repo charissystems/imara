@@ -202,3 +202,22 @@ CREATE TABLE IF NOT EXISTS template.communication_preferences (
 
 CREATE INDEX IF NOT EXISTS comm_prefs_member_idx ON template.communication_preferences(member_id);
 
+
+-- ─────────────────────────────────────────────────────────────────────
+-- PERFORMANCE INDEXES
+-- ─────────────────────────────────────────────────────────────────────
+
+-- Notifications: unread notification queries (most common mobile/web check)
+CREATE INDEX IF NOT EXISTS idx_notifications_member_unread
+    ON template.notifications(member_id, is_read, created_at DESC)
+    WHERE deleted_at IS NULL;
+
+-- Messages: inbox queries by recipient + status
+CREATE INDEX IF NOT EXISTS idx_messages_recipient_status
+    ON template.messages(recipient_id, status, created_at DESC)
+    WHERE deleted_at IS NULL;
+
+-- Standing instructions: active instructions for execution batch
+CREATE INDEX IF NOT EXISTS idx_standing_instructions_active
+    ON template.standing_instructions(savings_account_id, is_active, next_execution_date)
+    WHERE is_active = true AND deleted_at IS NULL;

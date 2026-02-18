@@ -154,3 +154,21 @@ CREATE TABLE IF NOT EXISTS template.member_accounts (
 
 CREATE INDEX IF NOT EXISTS member_accounts_active_idx ON template.member_accounts(is_active);
 CREATE INDEX IF NOT EXISTS member_accounts_frozen_idx ON template.member_accounts(account_frozen);
+
+-- ─────────────────────────────────────────────────────────────────────
+-- PERFORMANCE INDEXES
+-- ─────────────────────────────────────────────────────────────────────
+
+-- Soft-delete–aware status lookups (active member lists, onboarding checks)
+CREATE INDEX IF NOT EXISTS idx_members_status_active
+    ON template.members(status, member_number)
+    WHERE deleted_at IS NULL;
+
+-- Date-range queries: new member reports, dormancy checks
+CREATE INDEX IF NOT EXISTS idx_members_dates
+    ON template.members(registration_date, last_transaction_date)
+    WHERE deleted_at IS NULL;
+
+-- Member statistics targets for query planner
+ALTER TABLE template.members ALTER COLUMN status        SET STATISTICS 1000;
+ALTER TABLE template.members ALTER COLUMN member_number SET STATISTICS 500;

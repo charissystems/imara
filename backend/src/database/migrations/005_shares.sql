@@ -176,3 +176,16 @@ CREATE TABLE IF NOT EXISTS template.share_register (
 CREATE INDEX IF NOT EXISTS share_register_member_idx ON template.share_register(member_id);
 CREATE INDEX IF NOT EXISTS share_register_class_idx ON template.share_register(share_class_id);
 CREATE INDEX IF NOT EXISTS share_register_date_idx ON template.share_register(transaction_date);
+
+-- ─────────────────────────────────────────────────────────────────────
+-- PERFORMANCE INDEXES
+-- ─────────────────────────────────────────────────────────────────────
+
+-- Share holdings: member portfolio queries
+CREATE INDEX IF NOT EXISTS idx_share_holdings_member
+    ON template.share_holdings(member_id, share_class_id)
+    WHERE deleted_at IS NULL;
+
+-- Share transactions: audit trail / history queries
+CREATE INDEX IF NOT EXISTS idx_share_transactions_holding_date
+    ON template.share_transactions(holding_id, transaction_date DESC);

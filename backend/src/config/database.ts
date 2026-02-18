@@ -56,10 +56,18 @@ export class DatabaseManager {
             user: config.user,
             password: config.password,
             max: poolMax,
+            min: Math.max(2, Math.floor(poolMax / 5)), // Keep 20% connections warm
             idleTimeoutMillis: idleTimeout,
             connectionTimeoutMillis: connectionTimeout,
             // Enable connection statement timeout for safety
             statement_timeout: parseInt(process.env.DB_STATEMENT_TIMEOUT || '30000', 10),
+            // Enable query cancellation on client disconnect
+            query_timeout: parseInt(process.env.DB_QUERY_TIMEOUT || '25000', 10),
+            // Application name for pg_stat_activity monitoring
+            application_name: `imara-api-${process.env.NODE_ENV || 'dev'}`,
+            // Keepalive settings for long-running idle connections
+            keepAlive: true,
+            keepAliveInitialDelayMillis: 10000,
         });
 
         // LOGGING: Pool Errors (Network issues, idle timeouts)

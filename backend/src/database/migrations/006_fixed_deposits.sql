@@ -218,3 +218,16 @@ CREATE TABLE IF NOT EXISTS template.maturity_alerts (
 
 CREATE INDEX IF NOT EXISTS maturity_alerts_member_idx ON template.maturity_alerts(member_id);
 CREATE INDEX IF NOT EXISTS maturity_alerts_sent_idx ON template.maturity_alerts(sent_to_member);
+-- ─────────────────────────────────────────────────────────────────────
+-- PERFORMANCE INDEXES
+-- ─────────────────────────────────────────────────────────────────────
+
+-- Fixed deposits: maturity checking batch job (active FDs approaching maturity)
+CREATE INDEX IF NOT EXISTS idx_fixed_deposits_maturity
+    ON template.fixed_deposits(status, maturity_date, maturity_action)
+    WHERE status = 'active' AND deleted_at IS NULL;
+
+-- Fixed deposits: interest accrual batch job (tracks last_accrual_date gap)
+CREATE INDEX IF NOT EXISTS idx_fixed_deposits_accrual
+    ON template.fixed_deposits(status, deposit_date, last_accrual_date)
+    WHERE status = 'active' AND deleted_at IS NULL;

@@ -293,3 +293,59 @@ CREATE TABLE IF NOT EXISTS template.standing_instructions (
 CREATE INDEX IF NOT EXISTS standing_instructions_member_idx ON template.standing_instructions(member_id);
 CREATE INDEX IF NOT EXISTS standing_instructions_source_idx ON template.standing_instructions(source_account_id);
 CREATE INDEX IF NOT EXISTS standing_instructions_next_exec_idx ON template.standing_instructions(next_execution_date) WHERE status = 'active';
+-- ─────────────────────────────────────────────────────────────────────
+-- PERFORMANCE INDEXES
+-- ─────────────────────────────────────────────────────────────────────
+
+-- Savings accounts: member lookup with balance (most balance-check queries)
+CREATE INDEX IF NOT EXISTS idx_savings_accounts_member_balance
+    ON template.savings_accounts(member_id, status)
+    INCLUDE (principal_balance, account_number)
+    WHERE deleted_at IS NULL;
+
+-- Savings accounts: product-based interest posting batch
+CREATE INDEX IF NOT EXISTS idx_savings_accounts_product_active
+    ON template.savings_accounts(product_id, status, is_frozen)
+    WHERE status = 'active' AND is_frozen = false AND deleted_at IS NULL;
+
+-- FK index: savings_accounts → member
+CREATE INDEX IF NOT EXISTS idx_savings_accounts_member_fk
+    ON template.savings_accounts(member_id)
+    WHERE deleted_at IS NULL;
+
+-- FK index: savings_accounts → product
+CREATE INDEX IF NOT EXISTS idx_savings_accounts_product_fk
+    ON template.savings_accounts(product_id)
+    WHERE deleted_at IS NULL;
+
+-- Deposits: per-account chronological lookup
+CREATE INDEX IF NOT EXISTS idx_deposits_account_date
+    ON template.deposits(savings_account_id, deposit_date DESC)
+    WHERE deleted_at IS NULL;
+
+-- Withdrawals: per-account + status (approval workflows)
+CREATE INDEX IF NOT EXISTS idx_withdrawals_account_status
+    ON template.withdrawals(savings_account_id, status, withdrawal_date DESC)
+    WHERE deleted_at IS NULL;
+
+-- Withdrawals: pending-only partial index (approval queue)
+CREATE INDEX IF NOT EXISTS idx_withdrawals_pending
+    ON template.withdrawals(status, requested_date)
+    WHERE status = 'pending' AND deleted_at IS NULL;
+
+-- Transfers: source and destination account lookups
+CREATE INDEX IF NOT EXISTS idx_transfers_source_date
+    ON template.transfers(source_account_id, transfer_date DESC)
+    WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_transfers_destination_date
+    ON template.transfers(destination_account_id, transfer_date DESC)
+    WHERE deleted_at IS NULL;
+
+-- Interest schedules: batch posting job (unposted schedules only)
+CREATE INDEX IF NOT EXISTS idx_interest_schedules_posting
+    ON template.interest_schedules(savings_account_id, is_posted, period_start)
+    WHERE is_posted = false;
+
+-- Statistics targets
+ALTER TABLE template.savings_accounts ALTER COLUMN member_id SET STATISTICS 1000;

@@ -293,3 +293,14 @@ CREATE TABLE IF NOT EXISTS template.configuration_audit_log (
 
 CREATE INDEX IF NOT EXISTS config_audit_type_idx ON template.configuration_audit_log(configuration_type);
 CREATE INDEX IF NOT EXISTS config_audit_timestamp_idx ON template.configuration_audit_log(change_timestamp);
+-- ─────────────────────────────────────────────────────────────────────
+-- PERFORMANCE INDEXES
+-- ─────────────────────────────────────────────────────────────────────
+
+-- Audit log: per-user time-ordered queries (compliance and investigation)
+CREATE INDEX IF NOT EXISTS idx_audit_log_user_time
+    ON template.audit_log(user_id, created_at DESC);
+
+-- Audit log: entity-level change history (e.g. "all changes to loan X")
+CREATE INDEX IF NOT EXISTS idx_audit_log_entity
+    ON template.audit_log(entity_type, entity_id, created_at DESC);

@@ -371,3 +371,58 @@ CREATE TABLE IF NOT EXISTS template.loan_repayment_reminders (
 
 CREATE INDEX IF NOT EXISTS loan_reminders_loan_idx ON template.loan_repayment_reminders(loan_account_id);
 CREATE INDEX IF NOT EXISTS loan_reminders_date_idx ON template.loan_repayment_reminders(reminder_date);
+-- ─────────────────────────────────────────────────────────────────────
+-- PERFORMANCE INDEXES
+-- ─────────────────────────────────────────────────────────────────────
+
+-- Loan accounts: primary lookup pattern — member + status
+CREATE INDEX IF NOT EXISTS idx_loan_accounts_member_status
+    ON template.loan_accounts(member_id, status)
+    WHERE deleted_at IS NULL;
+
+-- Loan accounts: product-level reporting
+CREATE INDEX IF NOT EXISTS idx_loan_accounts_product_status
+    ON template.loan_accounts(product_id, status, disbursement_date)
+    WHERE deleted_at IS NULL;
+
+-- Loan accounts: defaulted partial index for recovery operations
+CREATE INDEX IF NOT EXISTS idx_loan_accounts_defaulted
+    ON template.loan_accounts(status, disbursement_date)
+    WHERE status = 'defaulted' AND deleted_at IS NULL;
+
+-- FK indexes for loan_accounts
+CREATE INDEX IF NOT EXISTS idx_loan_accounts_member_fk
+    ON template.loan_accounts(member_id)
+    WHERE deleted_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_loan_accounts_product_fk
+    ON template.loan_accounts(product_id)
+    WHERE deleted_at IS NULL;
+
+-- Loan schedules: penalty calculation batch (overdue installments)
+CREATE INDEX IF NOT EXISTS idx_loan_schedules_overdue_lookup
+    ON template.loan_schedules(loan_account_id, status, due_date)
+    WHERE status IN ('scheduled', 'partial', 'overdue');
+
+-- Loan schedules: covering index for installment queries
+CREATE INDEX IF NOT EXISTS idx_loan_schedules_payment_details
+    ON template.loan_schedules(loan_account_id, installment_number)
+    INCLUDE (principal_payment, interest_payment, penalty_payment, status, due_date);
+
+-- Loan repayments: repayment history per loan
+CREATE INDEX IF NOT EXISTS idx_loan_repayments_loan_date
+    ON template.loan_repayments(loan_account_id, repayment_date DESC);
+
+-- Loan guarantors: guarantor obligation checks
+CREATE INDEX IF NOT EXISTS idx_loan_guarantors_guarantor_app
+    ON template.loan_guarantors(guarantor_id, application_id)
+    WHERE deleted_at IS NULL;
+
+-- Loan applications: pending approval queue
+CREATE INDEX IF NOT EXISTS idx_loan_applications_pending
+    ON template.loan_applications(status, applied_date)
+    WHERE status = 'pending' AND deleted_at IS NULL;
+
+-- Statistics targets
+ALTER TABLE template.loan_accounts ALTER COLUMN member_id SET STATISTICS 1000;
+ALTER TABLE template.loan_accounts ALTER COLUMN status    SET STATISTICS 1000;
