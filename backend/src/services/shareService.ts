@@ -140,41 +140,42 @@ export class ShareService {
 
         const totalAmount = unitPrice.mul(input.quantity);
 
-        // Check member's existing holding
-        let holding = await this.db
-            .selectFrom('share_holdings')
-            .selectAll()
-            .where('member_id', '=', input.memberId)
-            .where('share_class_id', '=', input.shareClassId)
-            .where('deleted_at', 'is', null)
-            .executeTakeFirst();
-
-        const currentShares = holding ? Number(holding.total_shares) : 0;
-        const newTotal = currentShares + input.quantity;
-
-        // Enforce holding limits
-        if (shareClass.minimum_shares != null && input.quantity < Number(shareClass.minimum_shares)) {
-            throw new Error(
-                `Minimum purchase is ${shareClass.minimum_shares} shares for ${shareClass.name}`
-            );
-        }
-
-        if (shareClass.maximum_shares != null && newTotal > Number(shareClass.maximum_shares)) {
-            throw new Error(
-                `Maximum holding is ${shareClass.maximum_shares} shares. ` +
-                `Current: ${currentShares}, requested: ${input.quantity}`
-            );
-        }
-
-        const existingInvested = holding
-            ? new Decimal(holding.total_invested?.toString() ?? '0')
-            : new Decimal(0);
-
-        const newTotalInvested = existingInvested.plus(totalAmount);
-        const newAvgCost = newTotalInvested.div(newTotal);
-
-        // Execute all operations atomically in a transaction
+        // Execute all reads and writes atomically in a transaction
         const txResult = await this.db.transaction().execute(async (trx) => {
+            // Read holding inside transaction with FOR UPDATE lock to prevent races
+            let holding = await trx
+                .selectFrom('share_holdings')
+                .selectAll()
+                .where('member_id', '=', input.memberId)
+                .where('share_class_id', '=', input.shareClassId)
+                .where('deleted_at', 'is', null)
+                .forUpdate()
+                .executeTakeFirst();
+
+            const currentShares = holding ? Number(holding.total_shares) : 0;
+            const newTotal = currentShares + input.quantity;
+
+            // Enforce holding limits (inside transaction with locked data)
+            if (shareClass.minimum_shares != null && input.quantity < Number(shareClass.minimum_shares)) {
+                throw new Error(
+                    `Minimum purchase is ${shareClass.minimum_shares} shares for ${shareClass.name}`
+                );
+            }
+
+            if (shareClass.maximum_shares != null && newTotal > Number(shareClass.maximum_shares)) {
+                throw new Error(
+                    `Maximum holding is ${shareClass.maximum_shares} shares. ` +
+                    `Current: ${currentShares}, requested: ${input.quantity}`
+                );
+            }
+
+            const existingInvested = holding
+                ? new Decimal(holding.total_invested?.toString() ?? '0')
+                : new Decimal(0);
+
+            const newTotalInvested = existingInvested.plus(totalAmount);
+            const newAvgCost = newTotalInvested.div(newTotal);
+
             let txHolding;
 
             if (holding) {
@@ -243,10 +244,10 @@ export class ShareService {
                 })
                 .execute();
 
-            return { holding: txHolding, transaction };
+            return { holding: txHolding, transaction, newTotal, newTotalInvested };
         });
 
-        holding = txResult.holding;
+        const holding = txResult.holding;
         const transaction = txResult.transaction;
 
         appLogger.info('Shares purchased', {
@@ -259,8 +260,8 @@ export class ShareService {
         return {
             holding: {
                 id: holding.id,
-                totalShares: newTotal,
-                totalInvested: newTotalInvested.toFixed(2),
+                totalShares: txResult.newTotal,
+                totalInvested: txResult.newTotalInvested.toFixed(2),
                 certificateNumber: holding.certificate_number,
             },
             transaction: {
@@ -297,55 +298,56 @@ export class ShareService {
             throw new Error('Share class not found');
         }
 
-        // Get sender's holding
-        const fromHolding = await this.db
-            .selectFrom('share_holdings')
-            .selectAll()
-            .where('member_id', '=', input.fromMemberId)
-            .where('share_class_id', '=', input.shareClassId)
-            .where('deleted_at', 'is', null)
-            .executeTakeFirst();
-
-        if (!fromHolding) {
-            throw new Error('Sender has no shares in this class');
-        }
-
-        if (fromHolding.is_locked) {
-            throw new Error('Sender\'s shares are locked and cannot be transferred');
-        }
-
-        const senderShares = Number(fromHolding.total_shares);
-        if (senderShares < input.quantity) {
-            throw new Error(
-                `Insufficient shares. Available: ${senderShares}, requested: ${input.quantity}`
-            );
-        }
-
-        // Check receiver's limits
-        let toHolding = await this.db
-            .selectFrom('share_holdings')
-            .selectAll()
-            .where('member_id', '=', input.toMemberId)
-            .where('share_class_id', '=', input.shareClassId)
-            .where('deleted_at', 'is', null)
-            .executeTakeFirst();
-
-        const receiverCurrentShares = toHolding ? Number(toHolding.total_shares) : 0;
-        const receiverNewTotal = receiverCurrentShares + input.quantity;
-
-        if (shareClass.maximum_shares != null && receiverNewTotal > Number(shareClass.maximum_shares)) {
-            throw new Error(
-                `Transfer would exceed maximum holding limit (${shareClass.maximum_shares}) for receiver`
-            );
-        }
-
         const price = input.transferPrice
             ? new Decimal(input.transferPrice)
             : new Decimal(shareClass.current_price?.toString() ?? '0');
         const totalAmount = price.mul(input.quantity);
 
-        // Wrap all mutations in a database transaction
+        // Wrap ALL reads and writes in a transaction with row-level locking
         return await this.db.transaction().execute(async (trx) => {
+            // Lock and read sender's holding inside the transaction
+            const fromHolding = await trx
+                .selectFrom('share_holdings')
+                .selectAll()
+                .where('member_id', '=', input.fromMemberId)
+                .where('share_class_id', '=', input.shareClassId)
+                .where('deleted_at', 'is', null)
+                .forUpdate()
+                .executeTakeFirst();
+
+            if (!fromHolding) {
+                throw new Error('Sender has no shares in this class');
+            }
+
+            if (fromHolding.is_locked) {
+                throw new Error('Sender\'s shares are locked and cannot be transferred');
+            }
+
+            const senderShares = Number(fromHolding.total_shares);
+            if (senderShares < input.quantity) {
+                throw new Error(
+                    `Insufficient shares. Available: ${senderShares}, requested: ${input.quantity}`
+                );
+            }
+
+            // Lock and read receiver's holding (if exists)
+            let toHolding = await trx
+                .selectFrom('share_holdings')
+                .selectAll()
+                .where('member_id', '=', input.toMemberId)
+                .where('share_class_id', '=', input.shareClassId)
+                .where('deleted_at', 'is', null)
+                .forUpdate()
+                .executeTakeFirst();
+
+            const receiverCurrentShares = toHolding ? Number(toHolding.total_shares) : 0;
+            const receiverNewTotal = receiverCurrentShares + input.quantity;
+
+            if (shareClass.maximum_shares != null && receiverNewTotal > Number(shareClass.maximum_shares)) {
+                throw new Error(
+                    `Transfer would exceed maximum holding limit (${shareClass.maximum_shares}) for receiver`
+                );
+            }
             // Update sender holding
             const senderNewTotal = senderShares - input.quantity;
             const senderNewInvested = new Decimal(fromHolding.total_invested?.toString() ?? '0')
@@ -550,13 +552,6 @@ export class ShareService {
             throw new Error(`Cannot distribute dividend in '${declaration.status}' status. Must be 'approved'.`);
         }
 
-        // Update status to processing
-        await this.db
-            .updateTable('dividend_declarations')
-            .set({ status: 'processing' as any, updated_at: new Date() as any })
-            .where('id', '=', declarationId)
-            .execute();
-
         const dividendPerShare = new Decimal(declaration.dividend_per_share?.toString() ?? '0');
         const whtRate = new Decimal(declaration.withholding_tax_rate?.toString() ?? '0');
 
@@ -575,50 +570,66 @@ export class ShareService {
         const errors: Array<{ memberId: string; error: string }> = [];
         let holdersProcessed = 0;
 
-        for (const holding of holdings) {
-            try {
-                const shares = Number(holding.total_shares);
-                const grossDividend = dividendPerShare.mul(shares);
-                const wht = grossDividend.mul(whtRate).div(100);
-                const netDividend = grossDividend.minus(wht);
-
-                // Record dividend transaction
-                await this.db
-                    .insertInto('share_transactions')
-                    .values({
-                        share_holding_id: holding.id,
-                        member_id: holding.member_id,
-                        transaction_type: 'dividend' as any,
-                        quantity: shares as any,
-                        unit_price: dividendPerShare.toString() as any,
-                        total_amount: netDividend.toString() as any,
-                        transaction_date: new Date() as any,
-                        status: 'completed' as any,
-                        description: `Dividend payment: ${declaration.dividend_number}`,
-                        recorded_by: processedBy,
-                    })
+        // Wrap entire distribution in a single transaction for atomicity
+        try {
+            await this.db.transaction().execute(async (trx) => {
+                // Set status to processing inside the transaction
+                await trx
+                    .updateTable('dividend_declarations')
+                    .set({ status: 'processing' as any, updated_at: new Date() as any })
+                    .where('id', '=', declarationId)
                     .execute();
 
-                totalDividend = totalDividend.plus(grossDividend);
-                totalWht = totalWht.plus(wht);
-                totalNet = totalNet.plus(netDividend);
-                holdersProcessed++;
-            } catch (error) {
-                const errMsg = error instanceof Error ? error.message : 'Unknown error';
-                errors.push({ memberId: holding.member_id, error: errMsg });
-            }
-        }
+                for (const holding of holdings) {
+                    const shares = Number(holding.total_shares);
+                    const grossDividend = dividendPerShare.mul(shares);
+                    const wht = grossDividend.mul(whtRate).div(100);
+                    const netDividend = grossDividend.minus(wht);
 
-        // Update declaration with totals
-        await this.db
-            .updateTable('dividend_declarations')
-            .set({
-                total_dividend_amount: totalDividend.toString() as any,
-                status: 'completed' as any,
-                updated_at: new Date() as any,
-            })
-            .where('id', '=', declarationId)
-            .execute();
+                    // Record dividend transaction
+                    await trx
+                        .insertInto('share_transactions')
+                        .values({
+                            share_holding_id: holding.id,
+                            member_id: holding.member_id,
+                            transaction_type: 'dividend' as any,
+                            quantity: shares as any,
+                            unit_price: dividendPerShare.toString() as any,
+                            total_amount: netDividend.toString() as any,
+                            transaction_date: new Date() as any,
+                            status: 'completed' as any,
+                            description: `Dividend payment: ${declaration.dividend_number}`,
+                            recorded_by: processedBy,
+                        })
+                        .execute();
+
+                    totalDividend = totalDividend.plus(grossDividend);
+                    totalWht = totalWht.plus(wht);
+                    totalNet = totalNet.plus(netDividend);
+                    holdersProcessed++;
+                }
+
+                // Update declaration with totals
+                await trx
+                    .updateTable('dividend_declarations')
+                    .set({
+                        total_dividend_amount: totalDividend.toString() as any,
+                        status: 'completed' as any,
+                        updated_at: new Date() as any,
+                    })
+                    .where('id', '=', declarationId)
+                    .execute();
+            });
+        } catch (error) {
+            // On failure, reset declaration status so it can be retried
+            await this.db
+                .updateTable('dividend_declarations')
+                .set({ status: 'approved' as any, updated_at: new Date() as any })
+                .where('id', '=', declarationId)
+                .execute();
+
+            throw error;
+        }
 
         appLogger.info('Dividend distributed', {
             declarationId,

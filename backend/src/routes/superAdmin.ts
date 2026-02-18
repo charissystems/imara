@@ -6,6 +6,8 @@ import { ValidationError, NotFoundError, AppError } from '../middleware/errorHan
 import { requireSuperAdmin } from '../middleware/superAdmin';
 import { clearTenantCache } from '../middleware/tenantResolver';
 import { rateLimit } from '../middleware/rateLimiter';
+import { validate, getValidatedData } from '../middleware/validation';
+import { appLogger } from '../middleware/logger';
 
 // Rate limiter for super admin routes: 30 requests per 60s per IP
 const adminRateLimit = rateLimit({
@@ -93,9 +95,8 @@ app.get('/tenants/:id', async (c) => {
  * Create a new tenant (Django Admin Add View equivalent)
  * This triggers the schema creation logic via TenantService
  */
-app.post('/tenants', async (c) => {
-    const body = await c.req.json();
-    const data = createTenantSchema.parse(body);
+app.post('/tenants', validate(createTenantSchema), async (c) => {
+    const data = getValidatedData<z.infer<typeof createTenantSchema>>(c);
 
     // Check if subdomain or code already exists
     const existing = await publicDb
@@ -136,10 +137,8 @@ app.post('/tenants', async (c) => {
         }, 201);
     } catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Unknown error';
-        console.error('🔴 [ERROR] Failed to create tenant:', {
-            message: errorMsg,
+        appLogger.error('Failed to create tenant', error as Error, {
             code: data.code,
-            error
         });
 
         // Check if tenant was partially created despite error
@@ -151,7 +150,9 @@ app.post('/tenants', async (c) => {
 
         if (partialTenant) {
             // Tenant was created despite service error - return success
-            console.warn('🟡 [WARN] Tenant was created despite service error, returning success');
+            appLogger.warn('Tenant was created despite service error, returning success', {
+                code: data.code,
+            });
             return c.json({
                 success: true,
                 message: 'Tenant created successfully',
@@ -159,7 +160,7 @@ app.post('/tenants', async (c) => {
             }, 201);
         }
 
-        throw new AppError(500, `Failed to provision tenant infrastructure: ${errorMsg}`);
+        throw new AppError(500, 'Failed to provision tenant infrastructure. Check server logs for details.');
     }
 });
 
@@ -167,10 +168,9 @@ app.post('/tenants', async (c) => {
  * PATCH /admin/tenants/:id
  * Update tenant details
  */
-app.patch('/tenants/:id', async (c) => {
+app.patch('/tenants/:id', validate(updateTenantSchema), async (c) => {
     const id = c.req.param('id');
-    const body = await c.req.json();
-    const data = updateTenantSchema.parse(body);
+    const data = getValidatedData<z.infer<typeof updateTenantSchema>>(c);
 
     const updatedTenant = await publicDb
         .updateTable('tenants')
@@ -515,21 +515,9 @@ const extendSubscriptionSchema = z.object({
  * POST /admin/tenants/:id/extend-subscription
  * Extend tenant subscription
  */
-app.post('/tenants/:id/extend-subscription', async (c) => {
+app.post('/tenants/:id/extend-subscription', validate(extendSubscriptionSchema), async (c) => {
     const id = c.req.param('id');
-    const body = await c.req.json();
-
-    const result = extendSubscriptionSchema.safeParse(body);
-    if (!result.success) {
-        throw new ValidationError('Validation failed', {
-            errors: result.error.issues.map((e) => ({
-                field: e.path.join('.'),
-                message: e.message,
-            })),
-        });
-    }
-
-    const { days } = result.data;
+    const { days } = getValidatedData<z.infer<typeof extendSubscriptionSchema>>(c);
 
     const expiryDate = new Date();
     expiryDate.setDate(expiryDate.getDate() + days);

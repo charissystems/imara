@@ -20,6 +20,7 @@
 
 import { nanoid } from 'nanoid';
 import { randomInt } from 'crypto';
+import { Kysely } from 'kysely';
 import { appLogger } from '../middleware/logger';
 
 /**
@@ -225,6 +226,43 @@ export class MemberService {
     }
 
     /**
+     * Parse a single CSV line according to RFC 4180 (handles quoted fields)
+     */
+    private parseCSVLine(line: string): string[] {
+        const fields: string[] = [];
+        let current = '';
+        let inQuotes = false;
+
+        for (let i = 0; i < line.length; i++) {
+            const ch = line[i];
+            if (inQuotes) {
+                if (ch === '"') {
+                    // Check for escaped quote (double-quote)
+                    if (i + 1 < line.length && line[i + 1] === '"') {
+                        current += '"';
+                        i++; // skip next quote
+                    } else {
+                        inQuotes = false;
+                    }
+                } else {
+                    current += ch;
+                }
+            } else {
+                if (ch === '"') {
+                    inQuotes = true;
+                } else if (ch === ',') {
+                    fields.push(current.trim());
+                    current = '';
+                } else {
+                    current += ch;
+                }
+            }
+        }
+        fields.push(current.trim());
+        return fields;
+    }
+
+    /**
      * Parse bulk member import from CSV
      * Requirement: MEM-007
      */
@@ -238,7 +276,7 @@ export class MemberService {
             return { members, errors };
         }
 
-        const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+        const headers = this.parseCSVLine(lines[0]).map(h => h.toLowerCase());
         const requiredHeaders = ['fullname', 'dateofbirth', 'gender', 'nationalid', 'phone', 'email'];
         const missingHeaders = requiredHeaders.filter(h => !headers.includes(h));
 
@@ -249,7 +287,7 @@ export class MemberService {
 
         for (let i = 1; i < lines.length; i++) {
             try {
-                const values = lines[i].split(',').map(v => v.trim());
+                const values = this.parseCSVLine(lines[i]);
                 const member: Partial<MemberProfile> = {
                     fullName: values[headers.indexOf('fullname')],
                     dateOfBirth: new Date(values[headers.indexOf('dateofbirth')]),
@@ -327,7 +365,8 @@ export class MemberService {
         memberId: string,
         action: 'CREATE' | 'UPDATE' | 'DELETE' | 'STATUS_CHANGE',
         userId: string,
-        changes?: Record<string, { old: any; new: any }>
+        changes?: Record<string, { old: any; new: any }>,
+        db?: Kysely<any>
     ): Promise<void> {
         appLogger.info('Member audit event', {
             memberId,
@@ -337,8 +376,47 @@ export class MemberService {
             timestamp: new Date().toISOString(),
         });
 
-        // TODO: Persist to dedicated audit table per schema
-        // await db.insertInto('member_audit_log').values({...}).execute();
+        // Persist to audit_log table if db handle is provided
+        if (db) {
+            try {
+                const changeTypeMap: Record<string, string> = {
+                    CREATE: 'create',
+                    UPDATE: 'update',
+                    DELETE: 'delete',
+                    STATUS_CHANGE: 'update',
+                };
+
+                await db
+                    .insertInto('audit_log' as any)
+                    .values({
+                        user_id: userId,
+                        action: `member_${action.toLowerCase()}`,
+                        entity_type: 'members',
+                        entity_id: memberId,
+                        change_type: changeTypeMap[action] || 'update',
+                        old_values: changes
+                            ? JSON.stringify(
+                                  Object.fromEntries(
+                                      Object.entries(changes).map(([k, v]) => [k, v.old])
+                                  )
+                              )
+                            : null,
+                        new_values: changes
+                            ? JSON.stringify(
+                                  Object.fromEntries(
+                                      Object.entries(changes).map(([k, v]) => [k, v.new])
+                                  )
+                              )
+                            : null,
+                        status: 'success',
+                    } as any)
+                    .execute();
+            } catch (error) {
+                // Log but don't fail the primary operation for audit persistence errors
+                const errMsg = error instanceof Error ? error.message : 'Unknown error';
+                appLogger.error(`Failed to persist member audit event: member=${memberId} action=${action} error=${errMsg}`);
+            }
+        }
     }
 
     /**
@@ -396,8 +474,7 @@ export class MemberService {
      * Requirement: MEM-008
      */
     generateWelcomeMessage(member: MemberProfile, portalUrl: string): { sms: string; email: string; subject: string } {
-        const sms = `Welcome to ${member.tenantId} SACCO! Your member number is ${member.memberNumber}. ' +
-            'Portal: ${portalUrl} Save this securely.`;
+        const sms = `Welcome to ${member.tenantId} SACCO! Your member number is ${member.memberNumber}. Portal: ${portalUrl} Save this securely.`;
 
         const emailSubject = 'Welcome to SACCO - Member Account Created';
         

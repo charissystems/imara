@@ -110,21 +110,73 @@ export class AuditService {
             throw new Error('Reversal must be approved by a different user (dual authorization)');
         }
 
-        // Record approval
-        await this.db
-            .insertInto('audit_log')
-            .values({
-                user_id: approverId,
-                action: 'reversal_approved',
-                entity_type: reversal.entity_type,
-                entity_id: reversal.entity_id,
-                change_type: 'update',
-                old_values: JSON.stringify({ reversal_id: reversalId }) as any,
-                new_values: JSON.stringify({ status: 'reversed', approved_by: approverId }) as any,
-                status: 'success',
-            })
-            .execute();
+        const entityType = reversal.entity_type;
+        const entityId = reversal.entity_id;
 
-        return { reversal_id: reversalId, status: 'approved' };
+        // Map entity types to their database tables
+        const REVERSIBLE_TABLES: Record<string, string> = {
+            transactions: 'transactions',
+            deposit: 'transactions',
+            withdrawal: 'transactions',
+            journal_entries: 'journal_entries',
+            loan_accounts: 'loan_accounts',
+            share_transactions: 'share_transactions',
+        };
+
+        const tableName = REVERSIBLE_TABLES[entityType as string];
+        if (!tableName) {
+            throw new Error(`Reversal not supported for entity type: ${entityType}`);
+        }
+
+        // Perform the reversal and audit log within a single transaction
+        await this.db.transaction().execute(async (trx) => {
+            // Verify entity exists and is not already reversed
+            const entity = await trx
+                .selectFrom(tableName as any)
+                .selectAll()
+                .where('id', '=', entityId)
+                .executeTakeFirst();
+
+            if (!entity) {
+                throw new Error(`Entity ${entityType}/${entityId} not found`);
+            }
+
+            if ((entity as any).status === 'reversed') {
+                throw new Error(`Entity ${entityType}/${entityId} is already reversed`);
+            }
+
+            // Update entity status to reversed
+            await trx
+                .updateTable(tableName as any)
+                .set({
+                    status: 'reversed' as any,
+                    updated_at: new Date() as any,
+                })
+                .where('id', '=', entityId)
+                .execute();
+
+            // Record approval audit entry
+            await trx
+                .insertInto('audit_log')
+                .values({
+                    user_id: approverId,
+                    action: 'reversal_approved',
+                    entity_type: reversal.entity_type,
+                    entity_id: reversal.entity_id,
+                    change_type: 'update',
+                    old_values: JSON.stringify({
+                        reversal_id: reversalId,
+                        previous_status: (entity as any).status,
+                    }) as any,
+                    new_values: JSON.stringify({
+                        status: 'reversed',
+                        approved_by: approverId,
+                    }) as any,
+                    status: 'success',
+                })
+                .execute();
+        });
+
+        return { reversal_id: reversalId, status: 'approved', entity_status: 'reversed' };
     }
 }

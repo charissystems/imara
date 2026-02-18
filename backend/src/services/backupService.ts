@@ -8,7 +8,10 @@
 
 import { Tenant } from '../database/types';
 import { getTenantDb, publicDb } from '../config/database';
+import { sql } from 'kysely';
 import { appLogger } from '../middleware/logger';
+import { existsSync } from 'fs';
+import { stat } from 'fs/promises';
 
 export interface BackupOptions {
     reason?: string;
@@ -42,17 +45,16 @@ export class TenantBackupService {
             const reason = options.reason || 'Application initiated backup';
             const retentionDays = options.retentionDays || 30;
 
-            // Call PostgreSQL backup function
-            const result = await (publicDb as any)
-                .selectFrom('backup_tenant_schema')
-                .selectAll()
-                .execute(); // Cast due to function return type complexity
+            // Call PostgreSQL backup function with tenant schema parameter
+            const result = await sql<{ backup_id: string; backup_location: string }>`
+                SELECT * FROM backup_tenant_schema(${tenant.schema_name})
+            `.execute(publicDb);
 
-            if (!result || result.length === 0) {
+            if (!result || result.rows.length === 0) {
                 throw new Error('Backup function returned no results');
             }
 
-            const backupData = result[0];
+            const backupData = result.rows[0];
 
             // Parse backup response
             const backupStatus: BackupStatus = {
@@ -139,16 +141,30 @@ export class TenantBackupService {
 
             const backup = await this.getBackup(backupId);
 
-            // Check if backup file exists (placeholder - real implementation checks S3/filesystem)
-            const fileExists = true; // TODO: implement actual file check
+            // Verify backup file exists and is non-empty
+            let fileExists = false;
+            let fileSizeBytes: number | null = null;
+            const backupLocation = (backup as any).backup_location || (backup as any).location;
+
+            if (backupLocation) {
+                try {
+                    if (existsSync(backupLocation)) {
+                        const fileStat = await stat(backupLocation);
+                        fileExists = fileStat.isFile() && fileStat.size > 0;
+                        fileSizeBytes = fileStat.size;
+                    }
+                } catch {
+                    fileExists = false;
+                }
+            }
 
             if (!fileExists) {
                 await publicDb
                     .updateTable('tenant_backups')
                     .set({
-                        status: 'failed',
+                        status: 'failed' as any,
                         verification_timestamp: new Date(),
-                        verification_result: 'Backup file not found',
+                        verification_result: 'Backup file not found or empty',
                     })
                     .where('id', '=', backupId)
                     .execute();
@@ -160,10 +176,11 @@ export class TenantBackupService {
             await publicDb
                 .updateTable('tenant_backups')
                 .set({
-                    status: 'verified',
+                    status: 'verified' as any,
                     can_restore: true,
                     verification_timestamp: new Date(),
                     verification_result: 'OK',
+                    ...(fileSizeBytes != null && { size_bytes: fileSizeBytes }),
                 })
                 .where('id', '=', backupId)
                 .execute();
@@ -290,12 +307,34 @@ export class TenantBackupService {
     }
 
     /**
+     * Allowed fields for retention policy updates
+     */
+    private static readonly RETENTION_POLICY_FIELDS = new Set([
+        'audit_log_retention_days',
+        'activity_log_retention_days',
+        'transaction_retention_years',
+        'deleted_member_retention_days',
+        'auto_purge_enabled',
+    ]);
+
+    /**
      * Update retention policy for a tenant
      */
     async updateRetentionPolicy(
         tenantId: string,
         updates: Record<string, any>
     ): Promise<void> {
+        // Filter to only allowed fields
+        const safeUpdates: Record<string, any> = {};
+        for (const [key, val] of Object.entries(updates)) {
+            if (TenantBackupService.RETENTION_POLICY_FIELDS.has(key)) {
+                safeUpdates[key] = val;
+            }
+        }
+
+        if (Object.keys(safeUpdates).length === 0) {
+            throw new Error('No valid retention policy fields provided');
+        }
         try {
             appLogger.info('Updating retention policy', { tenantId, updates });
 
@@ -308,13 +347,13 @@ export class TenantBackupService {
             if (existing) {
                 await publicDb
                     .updateTable('tenant_retention_policies')
-                    .set(updates)
+                    .set(safeUpdates)
                     .where('tenant_id', '=', tenantId)
                     .execute();
             } else {
                 await publicDb
                     .insertInto('tenant_retention_policies')
-                    .values({ tenant_id: tenantId, ...updates })
+                    .values({ tenant_id: tenantId, ...safeUpdates })
                     .execute();
             }
 
