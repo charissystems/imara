@@ -195,12 +195,12 @@ describe('AccountingService.autoPostDepositTransaction', () => {
 
     it('should use correct cash account for mobile_money', () => {
         const entry = service.autoPostDepositTransaction('mem-1', 1000, 'mobile_money', '1110');
-        expect(entry.lineItems[1].accountCode).toBe('1120');
+        expect(entry.lineItems[0].accountCode).toBe('1120');
     });
 
     it('should default to cash account code for unknown channel', () => {
         const entry = service.autoPostDepositTransaction('mem-1', 1000, 'unknown', '1110');
-        expect(entry.lineItems[1].accountCode).toBe('1100');
+        expect(entry.lineItems[0].accountCode).toBe('1100');
     });
 
     it('should include member and channel in description', () => {

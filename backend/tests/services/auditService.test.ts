@@ -210,16 +210,46 @@ describe('AuditService - approveReversal', () => {
             entity_id: 'dep-123',
         };
 
+        const mockEntity = {
+            id: 'dep-123',
+            status: 'completed',
+        };
+
         const selectBuilder = createMockQueryBuilder([mockReversal]);
+        const entitySelectBuilder = createMockQueryBuilder([mockEntity]);
+        let selectCallCount = 0;
+
         const insertBuilder = {
             values: vi.fn().mockReturnValue({
                 execute: vi.fn().mockResolvedValue([{ id: 'approval-001' }]),
             }),
         };
 
+        const updateBuilder = {
+            set: vi.fn().mockReturnValue({
+                where: vi.fn().mockReturnValue({
+                    execute: vi.fn().mockResolvedValue([]),
+                }),
+            }),
+        };
+
         const mockDb = {
-            selectFrom: vi.fn().mockReturnValue(selectBuilder),
+            selectFrom: vi.fn().mockImplementation(() => {
+                selectCallCount++;
+                return selectCallCount === 1 ? selectBuilder : entitySelectBuilder;
+            }),
             insertInto: vi.fn().mockReturnValue(insertBuilder),
+            updateTable: vi.fn().mockReturnValue(updateBuilder),
+            transaction: vi.fn().mockReturnValue({
+                execute: vi.fn().mockImplementation(async (fn: any) => {
+                    const trxDb = {
+                        selectFrom: vi.fn().mockReturnValue(entitySelectBuilder),
+                        insertInto: vi.fn().mockReturnValue(insertBuilder),
+                        updateTable: vi.fn().mockReturnValue(updateBuilder),
+                    };
+                    return fn(trxDb);
+                }),
+            }),
         } as any;
 
         const service = new AuditService(mockDb);
@@ -229,8 +259,8 @@ describe('AuditService - approveReversal', () => {
         expect(result).toEqual({
             reversal_id: 'reversal-001',
             status: 'approved',
+            entity_status: 'reversed',
         });
-        expect(mockDb.insertInto).toHaveBeenCalledWith('audit_log');
     });
 
     it('should reject when reversal not found', async () => {

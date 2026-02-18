@@ -266,8 +266,10 @@ describe('LoanService.calculateTotalLoanCost', () => {
     it('should calculate declining interest (less than flat)', () => {
         const decliningProduct = { ...validProduct, interestMethod: 'declining_emi' as const };
         const cost = service.calculateTotalLoanCost(100000, decliningProduct, 12);
-        // Declining: 100000 * 12/100 * 12/24 = 6000
-        expect(cost.interestTotal).toBe(6000);
+        // Declining EMI interest is computed from the actual schedule, which is
+        // more accurate than the old approximation (principal * rate * months/24).
+        // With 12% annual rate over 12 monthly installments, actual EMI interest ≈ 6618.53
+        expect(cost.interestTotal).toBeCloseTo(6618.53, 0);
         expect(cost.interestTotal).toBeLessThan(12000); // less than flat
     });
 

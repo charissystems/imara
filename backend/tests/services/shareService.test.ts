@@ -31,6 +31,7 @@ function createMockQueryBuilder(rows: any[] = []) {
 function createMockDb(overrides: Record<string, any> = {}) {
     const insertBuilder = {
         values: vi.fn().mockReturnValue({
+            execute: vi.fn().mockResolvedValue([]),
             returning: vi.fn().mockReturnValue({
                 execute: vi.fn().mockResolvedValue(overrides.insertRows || [{ id: 'new-id' }]),
             }),
@@ -52,12 +53,33 @@ function createMockDb(overrides: Record<string, any> = {}) {
         }),
     };
 
-    return {
+    const db = {
         selectFrom: vi.fn().mockReturnValue(createMockQueryBuilder(overrides.selectRows || [])),
         insertInto: vi.fn().mockReturnValue(insertBuilder),
         updateTable: vi.fn().mockReturnValue(updateBuilder),
-        transaction: vi.fn(),
-    } as any;
+        transaction: null as any,
+    };
+
+    // Transaction mock: delegates selectFrom/insertInto/updateTable to the outer db mock
+    // so that test overrides (e.g. sequential selectFrom calls) work inside transactions.
+    db.transaction = vi.fn().mockReturnValue({
+        execute: vi.fn().mockImplementation(async (fn: any) => {
+            const trxDb = {
+                selectFrom: vi.fn().mockImplementation((...args: any[]) => {
+                    const builder = db.selectFrom(...args);
+                    return {
+                        ...builder,
+                        forUpdate: vi.fn().mockReturnValue(builder),
+                    };
+                }),
+                insertInto: vi.fn().mockImplementation((...args: any[]) => db.insertInto(...args)),
+                updateTable: vi.fn().mockImplementation((...args: any[]) => db.updateTable(...args)),
+            };
+            return fn(trxDb);
+        }),
+    });
+
+    return db as any;
 }
 
 // ────────────────────────────────────────────────────────────

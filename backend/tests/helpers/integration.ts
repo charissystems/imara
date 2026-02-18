@@ -36,8 +36,6 @@ export async function generateTestToken(overrides?: Record<string, unknown>): Pr
     const now = Math.floor(Date.now() / 1000);
     const payload = {
         staffId: TEST_STAFF_ID,
-        staffEmail: 'teststaff@example.com',
-        staffNumber: 'STF-001',
         role: 'sacco_administrator',
         tenantId: TEST_TENANT_ID,
         type: 'access',

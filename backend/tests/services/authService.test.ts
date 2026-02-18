@@ -123,8 +123,8 @@ describe('AuthService', () => {
 
             expect(decoded).toBeDefined();
             expect(decoded?.staffId).toBe('staff-456');
-            expect(decoded?.staffEmail).toBe('john@example.com');
-            expect(decoded?.staffNumber).toBe('STF002');
+            expect(decoded?.staffEmail).toBeUndefined();
+            expect(decoded?.staffNumber).toBeUndefined();
         });
 
         it('should set correct expiration time', async () => {
@@ -260,8 +260,6 @@ describe('AuthService', () => {
             const now = Math.floor(Date.now() / 1000);
             const payload: AuthJWTPayload = {
                 staffId: 'staff-303',
-                staffEmail: 'expired@example.com',
-                staffNumber: 'STF010',
                 iat: now - 3600,
                 exp: now - 1800, // Expired 30 minutes ago
             };

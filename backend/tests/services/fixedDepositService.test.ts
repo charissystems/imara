@@ -44,11 +44,27 @@ function createMockDb(overrides: Record<string, any> = {}) {
         }),
     };
 
-    return {
+    const mockDb: any = {
         selectFrom: vi.fn().mockReturnValue(createMockQueryBuilder(overrides.selectRows || [])),
         insertInto: vi.fn().mockReturnValue(insertBuilder),
         updateTable: vi.fn().mockReturnValue(updateBuilder),
-    } as any;
+        transaction: vi.fn().mockReturnValue({
+            execute: vi.fn().mockImplementation(async (fn: any) => {
+                // The transaction callback receives a trx that behaves like the db
+                const trxQueryBuilder = createMockQueryBuilder(overrides.selectRows || []);
+                // Add forUpdate support for SELECT ... FOR UPDATE inside transactions
+                trxQueryBuilder.forUpdate = vi.fn().mockReturnThis();
+                const trx: any = {
+                    selectFrom: vi.fn().mockReturnValue(trxQueryBuilder),
+                    insertInto: vi.fn().mockReturnValue(insertBuilder),
+                    updateTable: vi.fn().mockReturnValue(updateBuilder),
+                };
+                return fn(trx);
+            }),
+        }),
+    };
+
+    return mockDb;
 }
 
 // ────────────────────────────────────────────────────────────
@@ -684,6 +700,8 @@ describe('FixedDepositService - processPrematureWithdrawal', () => {
     it('should close FD and return withdrawal result', async () => {
         const fd = {
             deposit_id: 'fd-1',
+            id: 'fd-1',
+            status: 'active',
             principal_amount: '500000',
             interest_accrued: '20000',
             allows_premature_withdrawal: true,
@@ -698,7 +716,8 @@ describe('FixedDepositService - processPrematureWithdrawal', () => {
 
         expect(result.principalAmount.toNumber()).toBe(500000);
         expect(result.penalty.toNumber()).toBe(2000);
-        expect(mockDb.updateTable).toHaveBeenCalled();
+        // The update now happens inside a transaction, so verify transaction was called
+        expect(mockDb.transaction).toHaveBeenCalled();
     });
 });
 

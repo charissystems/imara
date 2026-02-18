@@ -92,8 +92,6 @@ describe('authMiddleware', () => {
     it('should set user context on valid token', async () => {
         (verify as any).mockResolvedValue({
             staffId: 'staff-1',
-            staffEmail: 'admin@test.com',
-            staffNumber: 'STF-001',
             role: 'sacco_administrator',
             tenantId: 'tenant-1',
             type: 'access',
@@ -104,8 +102,6 @@ describe('authMiddleware', () => {
 
         expect(ctx.set).toHaveBeenCalledWith('user', expect.objectContaining({
             id: 'staff-1',
-            email: 'admin@test.com',
-            staffNumber: 'STF-001',
             role: 'sacco_administrator',
             tenant_id: 'tenant-1',
         }));
@@ -148,7 +144,6 @@ describe('authMiddleware', () => {
     it('should default role to "staff" when not in token', async () => {
         (verify as any).mockResolvedValue({
             staffId: 'staff-1',
-            staffEmail: 'a@b.com',
             type: 'access',
         });
 
