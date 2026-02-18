@@ -14,7 +14,7 @@
 
 import Decimal from 'decimal.js';
 import { nanoid } from 'nanoid';
-import { Kysely } from 'kysely';
+import { Kysely, sql } from 'kysely';
 import { TenantDatabase } from '../database/types';
 import { NotificationService } from './notificationService';
 import { appLogger } from '../middleware/logger';
@@ -268,6 +268,13 @@ export class FixedDepositService {
                 .where('fd.status', '=', 'active')
                 .where('fd.deleted_at', 'is', null)
                 .where('fd.deposit_date', '<=', asOfDate as any)
+                // Idempotency guard: skip deposits already accrued for this date
+                .where((eb: any) =>
+                    eb.or([
+                        eb(sql.ref('fd.last_accrual_date'), 'is', null),
+                        eb(sql.ref('fd.last_accrual_date'), '<', asOfDate as any),
+                    ])
+                )
                 .execute();
 
             for (const fd of activeDeposits) {
@@ -294,8 +301,9 @@ export class FixedDepositService {
                         .updateTable('fixed_deposits')
                         .set({
                             interest_accrued: existingAccrued.plus(dailyInterest) as any,
+                            last_accrual_date: asOfDate as any,
                             updated_at: new Date() as any,
-                        })
+                        } as any)
                         .where('id', '=', fd.deposit_id)
                         .execute();
 
@@ -393,18 +401,34 @@ export class FixedDepositService {
     ): Promise<PrematureWithdrawalResult> {
         const result = await this.calculatePrematureWithdrawal(depositId);
 
-        await this.db
-            .updateTable('fixed_deposits')
-            .set({
-                status: 'closed' as any,
-                maturity_action: 'withdrawn' as any,
-                maturity_action_date: new Date() as any,
-                interest_paid: result.interestEarned.minus(result.penalty).toFixed(4) as any,
-                withholding_tax_amount: result.withholdingTax.toFixed(4) as any,
-                updated_at: new Date() as any,
-            })
-            .where('id', '=', depositId)
-            .execute();
+        // Use a transaction with status guard to prevent double-withdrawal
+        await this.db.transaction().execute(async (trx) => {
+            // Re-verify the deposit is still active within the transaction
+            const fd = await trx
+                .selectFrom('fixed_deposits')
+                .select(['id', 'status'])
+                .where('id', '=', depositId)
+                .where('status', '=', 'active')
+                .forUpdate()
+                .executeTakeFirst();
+
+            if (!fd) {
+                throw new Error(`Fixed deposit ${depositId} is no longer active`);
+            }
+
+            await trx
+                .updateTable('fixed_deposits')
+                .set({
+                    status: 'closed' as any,
+                    maturity_action: 'withdrawn' as any,
+                    maturity_action_date: new Date() as any,
+                    interest_paid: result.interestEarned.minus(result.penalty).toFixed(4) as any,
+                    withholding_tax_amount: result.withholdingTax.toFixed(4) as any,
+                    updated_at: new Date() as any,
+                })
+                .where('id', '=', depositId)
+                .execute();
+        });
 
         appLogger.info('FD premature withdrawal processed', {
             depositId,
@@ -458,62 +482,65 @@ export class FixedDepositService {
 
         const newCertNumber = `FD-${nanoid(12)}`;
 
-        // Create new FD
-        const [newFd] = await this.db
-            .insertInto('fixed_deposits')
-            .values({
-                member_id: fd.member_id,
-                product_id: fd.product_id,
-                certificate_number: newCertNumber,
-                principal_amount: rolloverPrincipal as any,
-                interest_rate: new Decimal(fd.fixed_interest_rate?.toString() ?? fd.interest_rate?.toString() ?? '0') as any,
-                deposit_date: new Date() as any,
-                maturity_date: newMaturityDate as any,
-                total_interest_payable: new Decimal(0) as any,
-                interest_accrued: new Decimal(0) as any,
-                interest_paid: new Decimal(0) as any,
-                withholding_tax_amount: new Decimal(0) as any,
-                status: 'active' as any,
-                maturity_action: 'auto_rollover' as any,
-            })
-            .returning('id')
-            .execute();
+        // Wrap all three operations atomically in a transaction
+        await this.db.transaction().execute(async (trx) => {
+            // Create new FD
+            const [newFd] = await trx
+                .insertInto('fixed_deposits')
+                .values({
+                    member_id: fd.member_id,
+                    product_id: fd.product_id,
+                    certificate_number: newCertNumber,
+                    principal_amount: rolloverPrincipal as any,
+                    interest_rate: new Decimal(fd.fixed_interest_rate?.toString() ?? fd.interest_rate?.toString() ?? '0') as any,
+                    deposit_date: new Date() as any,
+                    maturity_date: newMaturityDate as any,
+                    total_interest_payable: new Decimal(0) as any,
+                    interest_accrued: new Decimal(0) as any,
+                    interest_paid: new Decimal(0) as any,
+                    withholding_tax_amount: new Decimal(0) as any,
+                    status: 'active' as any,
+                    maturity_action: 'auto_rollover' as any,
+                })
+                .returning('id')
+                .execute();
 
-        // Close original FD
-        await this.db
-            .updateTable('fixed_deposits')
-            .set({
-                status: 'rolled_over' as any,
-                maturity_action_date: new Date() as any,
-                interest_paid: netInterest as any,
-                withholding_tax_amount: wht as any,
-                updated_at: new Date() as any,
-            })
-            .where('id', '=', fd.deposit_id)
-            .execute();
+            // Close original FD
+            await trx
+                .updateTable('fixed_deposits')
+                .set({
+                    status: 'rolled_over' as any,
+                    maturity_action_date: new Date() as any,
+                    interest_paid: netInterest as any,
+                    withholding_tax_amount: wht as any,
+                    updated_at: new Date() as any,
+                })
+                .where('id', '=', fd.deposit_id)
+                .execute();
 
-        // Create rollover record
-        await this.db
-            .insertInto('fd_rollovers')
-            .values({
-                original_fd_id: fd.deposit_id,
-                new_fd_id: newFd.id,
-                rollover_date: new Date() as any,
-                rollover_type: fd.default_rollover_type as any,
-                principal_rolled: rolloverPrincipal as any,
-                interest_option: fd.default_rollover_type === 'principal_plus_interest'
-                    ? ('reinvested' as any)
-                    : ('credited_to_savings' as any),
-                status: 'processed' as any,
-                processed_at: new Date() as any,
-            })
-            .execute();
+            // Create rollover record
+            await trx
+                .insertInto('fd_rollovers')
+                .values({
+                    original_fd_id: fd.deposit_id,
+                    new_fd_id: newFd.id,
+                    rollover_date: new Date() as any,
+                    rollover_type: fd.default_rollover_type as any,
+                    principal_rolled: rolloverPrincipal as any,
+                    interest_option: fd.default_rollover_type === 'principal_plus_interest'
+                        ? ('reinvested' as any)
+                        : ('credited_to_savings' as any),
+                    status: 'processed' as any,
+                    processed_at: new Date() as any,
+                })
+                .execute();
 
-        appLogger.info('FD auto-rollover processed', {
-            originalId: fd.deposit_id,
-            newId: newFd.id,
-            principal: rolloverPrincipal.toString(),
-            type: fd.default_rollover_type,
+            appLogger.info('FD auto-rollover processed', {
+                originalId: fd.deposit_id,
+                newId: newFd.id,
+                principal: rolloverPrincipal.toString(),
+                type: fd.default_rollover_type,
+            });
         });
     }
 }

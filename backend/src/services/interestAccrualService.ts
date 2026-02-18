@@ -269,8 +269,22 @@ export class InterestAccrualEngine {
                 .where('sa.is_frozen', '=', false)
                 .execute();
 
+            // Idempotency: find accounts already accrued for this date
+            const alreadyAccrued = await this.db
+                .selectFrom('interest_schedules')
+                .select('savings_account_id')
+                .where('period_start', '=', today as any)
+                .execute();
+            const alreadyAccruedSet = new Set(alreadyAccrued.map(r => r.savings_account_id));
+
             for (const account of accounts) {
                 try {
+                    // Idempotency: skip if already accrued for this date
+                    if (alreadyAccruedSet.has(account.account_id)) {
+                        result.accountsSkipped++;
+                        continue;
+                    }
+
                     const balance = new Decimal(account.principal_balance?.toString() ?? '0');
                     const minBalance = new Decimal(account.minimum_balance?.toString() ?? '0');
 

@@ -2,6 +2,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
 import Decimal from 'decimal.js';
+import { Kysely } from 'kysely';
 import { Env } from '../middleware/types';
 import { validate, getValidatedData, commonSchemas } from '../middleware/validation';
 import { ValidationError, NotFoundError, UnauthorizedError } from '../middleware/errorHandler';
@@ -12,6 +13,7 @@ import { LoanService } from '../services/loanService';
 import { AccountRepository } from '../repositories/accountRepository';
 import { MemberRepository } from '../repositories/memberRepository';
 import { getTenantDb } from '../config/database';
+import { TenantDatabase } from '../database/types';
 import { hasPermission, enforcePermission } from '../middleware/rbac';
 import { rateLimit } from '../middleware/rateLimiter';
 
@@ -1925,10 +1927,10 @@ loanRoutes.post('/:loanId/guarantor-recovery', enforcePermission('loans', 'updat
         // Verify guarantor has sufficient savings
         const guarantorAccounts = await accountRepo.findAccountsByMemberId(data.guarantor_id);
         const guarantorSavings = guarantorAccounts.reduce(
-            (sum, acc) => sum + Number(acc.principal_balance || 0), 0
+            (sum, acc) => sum.plus(new Decimal(acc.principal_balance?.toString() || '0')), new Decimal(0)
         );
 
-        if (guarantorSavings < data.amount) {
+        if (guarantorSavings.lt(data.amount)) {
             throw new ValidationError(
                 `Guarantor has insufficient savings balance. Available: ${guarantorSavings.toFixed(2)}, Requested: ${data.amount.toFixed(2)}`
             );
@@ -1939,7 +1941,7 @@ loanRoutes.post('/:loanId/guarantor-recovery', enforcePermission('loans', 'updat
 
         // Find guarantor's primary savings account (first with sufficient balance)
         const sourceAccount = guarantorAccounts.find(
-            acc => Number(acc.principal_balance || 0) >= data.amount
+            acc => new Decimal(acc.principal_balance?.toString() || '0').gte(data.amount)
         );
 
         if (!sourceAccount) {
@@ -1947,12 +1949,14 @@ loanRoutes.post('/:loanId/guarantor-recovery', enforcePermission('loans', 'updat
         }
 
         // Execute guarantor recovery atomically in a database transaction
+        // Both the savings deduction AND loan repayment must succeed or fail together.
         const result = await db.transaction().execute(async (trx) => {
             // Create withdrawal from guarantor's savings
+            const newBalance = new Decimal(sourceAccount.principal_balance?.toString() || '0').minus(data.amount);
             await trx
                 .updateTable('savings_accounts' as any)
                 .set({
-                    principal_balance: String(Number(sourceAccount.principal_balance) - data.amount) as any,
+                    principal_balance: newBalance.toString() as any,
                     updated_at: now as any,
                 } as any)
                 .where('id', '=', sourceAccount.id)
@@ -1988,20 +1992,22 @@ loanRoutes.post('/:loanId/guarantor-recovery', enforcePermission('loans', 'updat
                 } as any)
                 .execute();
 
+            // Process loan repayment INSIDE the same transaction
+            // Use the transaction-scoped connection to ensure atomicity
+            const repaymentService = new RepaymentService(trx as unknown as Kysely<TenantDatabase>);
+            const repaymentResult = await repaymentService.processRepayment({
+                loanAccountId: loanId,
+                amount: data.amount,
+                paymentMethod: 'internal',
+                paymentReference: recoveryRef,
+                recordedBy: user!.id,
+            });
+
             return {
                 sourceAccountId: sourceAccount.id,
-                remainingBalance: Number(sourceAccount.principal_balance) - data.amount,
+                remainingBalance: newBalance.toNumber(),
+                repaymentResult,
             };
-        });
-
-        // Process loan repayment (uses its own transaction internally)
-        const repaymentService = new RepaymentService(db);
-        const repaymentResult = await repaymentService.processRepayment({
-            loanAccountId: loanId,
-            amount: data.amount,
-            paymentMethod: 'internal',
-            paymentReference: recoveryRef,
-            recordedBy: user!.id,
         });
 
         return c.json({
@@ -2014,14 +2020,14 @@ loanRoutes.post('/:loanId/guarantor-recovery', enforcePermission('loans', 'updat
                 recovery_reference: recoveryRef,
                 reason: data.reason,
                 source_account_id: sourceAccount.id,
-                guarantor_remaining_balance: Number(sourceAccount.principal_balance) - data.amount,
+                guarantor_remaining_balance: result.remainingBalance,
                 repayment: {
-                    repayment_id: repaymentResult.repaymentId,
-                    allocated_principal: repaymentResult.allocatedPrincipal.toString(),
-                    allocated_interest: repaymentResult.allocatedInterest.toString(),
-                    allocated_penalty: repaymentResult.allocatedPenalty.toString(),
-                    remaining_loan_balance: repaymentResult.remainingBalance.toString(),
-                    loan_fully_repaid: repaymentResult.loanFullyRepaid,
+                    repayment_id: result.repaymentResult.repaymentId,
+                    allocated_principal: result.repaymentResult.allocatedPrincipal.toString(),
+                    allocated_interest: result.repaymentResult.allocatedInterest.toString(),
+                    allocated_penalty: result.repaymentResult.allocatedPenalty.toString(),
+                    remaining_loan_balance: result.repaymentResult.remainingBalance.toString(),
+                    loan_fully_repaid: result.repaymentResult.loanFullyRepaid,
                 },
                 recovered_at: now.toISOString(),
             },

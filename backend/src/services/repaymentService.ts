@@ -107,44 +107,45 @@ export class RepaymentService {
             throw new Error('Payment amount must be positive');
         }
 
-        // 1. Fetch the loan account
-        const loan = await this.db
-            .selectFrom('loan_accounts')
-            .selectAll()
-            .where('id', '=', input.loanAccountId)
-            .where('status', 'in', ['active', 'defaulted'])
-            .executeTakeFirst();
-
-        if (!loan) {
-            throw new Error(`Loan account ${input.loanAccountId} not found or not active`);
-        }
-
-        // 2. Fetch the loan product for penalty config
-        const product = await this.db
-            .selectFrom('loan_products')
-            .selectAll()
-            .where('id', '=', loan.product_id)
-            .executeTakeFirst();
-
-        if (!product) {
-            throw new Error(`Loan product ${loan.product_id} not found`);
-        }
-
-        // 3. Fetch unpaid installments ordered by due_date
-        const installments = await this.db
-            .selectFrom('loan_schedules')
-            .selectAll()
-            .where('loan_account_id', '=', input.loanAccountId)
-            .where('status', 'in', ['scheduled', 'partial', 'overdue'])
-            .orderBy('due_date', 'asc')
-            .execute();
-
-        if (installments.length === 0) {
-            throw new Error('No outstanding installments found for this loan');
-        }
-
-        // Wrap all mutations in a database transaction for atomicity
+        // Wrap all reads AND mutations in a database transaction for atomicity
+        // and to prevent TOCTOU races (e.g. double repayments)
         return await this.db.transaction().execute(async (trx) => {
+            // 1. Fetch the loan account (inside transaction for consistency)
+            const loan = await trx
+                .selectFrom('loan_accounts')
+                .selectAll()
+                .where('id', '=', input.loanAccountId)
+                .where('status', 'in', ['active', 'defaulted'])
+                .executeTakeFirst();
+
+            if (!loan) {
+                throw new Error(`Loan account ${input.loanAccountId} not found or not active`);
+            }
+
+            // 2. Fetch the loan product for penalty config
+            const product = await trx
+                .selectFrom('loan_products')
+                .selectAll()
+                .where('id', '=', loan.product_id)
+                .executeTakeFirst();
+
+            if (!product) {
+                throw new Error(`Loan product ${loan.product_id} not found`);
+            }
+
+            // 3. Fetch unpaid installments ordered by due_date (inside transaction)
+            const installments = await trx
+                .selectFrom('loan_schedules')
+                .selectAll()
+                .where('loan_account_id', '=', input.loanAccountId)
+                .where('status', 'in', ['scheduled', 'partial', 'overdue'])
+                .orderBy('due_date', 'asc')
+                .execute();
+
+            if (installments.length === 0) {
+                throw new Error('No outstanding installments found for this loan');
+            }
+
             // 4. Walk through installments allocating payment
             let remaining = paymentAmount;
             let totalAllocatedPenalty = new Decimal(0);
@@ -209,10 +210,19 @@ export class RepaymentService {
                 }
 
                 // 5. Update the installment (inside transaction)
+                // Write back the REMAINING amounts so partial payments are tracked correctly.
+                // On re-entry, these columns reflect what is still owed, not the original schedule.
+                const remainingPrincipal = outstandingPrincipal.minus(allocation.allocatedPrincipal);
+                const remainingInterest = outstandingInterest.minus(allocation.allocatedInterest);
+                const remainingPenalty = penalty.minus(allocation.allocatedPenalty);
+
                 await trx
                     .updateTable('loan_schedules')
                     .set({
-                        penalty_payment: allocation.allocatedPenalty.toString() as any,
+                        principal_payment: Decimal.max(0, remainingPrincipal).toString() as any,
+                        interest_payment: Decimal.max(0, remainingInterest).toString() as any,
+                        penalty_payment: Decimal.max(0, remainingPenalty).toString() as any,
+                        total_payment: Decimal.max(0, remainingPrincipal.plus(remainingInterest).plus(remainingPenalty)).toString() as any,
                         status: newStatus as any,
                         days_overdue: daysOverdue,
                         paid_date: fullyPaid ? (repaymentDate as any) : undefined,

@@ -26,7 +26,10 @@
  */
 
 import { nanoid } from 'nanoid';
+import Decimal from 'decimal.js';
 import { appLogger } from '../middleware/logger';
+
+Decimal.set({ precision: 20, rounding: Decimal.ROUND_HALF_UP });
 
 /**
  * Loan product configuration
@@ -337,27 +340,33 @@ export class LoanService {
         insuranceFee: number;
         total: number;
     } {
-        const applicationFee = principal * (product.applicationFee / 100);
-        const processingFee = principal * (product.processingFee / 100);
-        const insuranceFee = principal * (product.insuranceFee / 100);
+        const p = new Decimal(principal);
+        const applicationFee = p.mul(product.applicationFee).div(100);
+        const processingFee = p.mul(product.processingFee).div(100);
+        const insuranceFee = p.mul(product.insuranceFee).div(100);
 
-        let interestTotal = 0;
+        let interestTotal: Decimal;
         if (product.interestMethod === 'flat') {
-            interestTotal = principal * (product.interestRate / 100) * (tenureMonths / 12);
-        } else if (product.interestMethod === 'declining_emi' || product.interestMethod === 'declining_principal') {
-            // Approximate: simple interest on diminishing principal
-            interestTotal = principal * (product.interestRate / 100) * (tenureMonths / 24);
+            interestTotal = p.mul(product.interestRate).div(100).mul(tenureMonths).div(12);
+        } else {
+            // Compute total interest from actual schedule for accuracy
+            const schedule = this.generateRepaymentSchedule(
+                principal, tenureMonths, product.interestRate, product.interestMethod,
+            );
+            interestTotal = schedule.reduce(
+                (sum, inst) => sum.plus(inst.interestAmount), new Decimal(0),
+            );
         }
 
-        const total = principal + interestTotal + applicationFee + processingFee + insuranceFee;
+        const total = p.plus(interestTotal).plus(applicationFee).plus(processingFee).plus(insuranceFee);
 
         return {
             principal,
-            interestTotal,
-            applicationFee,
-            processingFee,
-            insuranceFee,
-            total,
+            interestTotal: interestTotal.toDecimalPlaces(2).toNumber(),
+            applicationFee: applicationFee.toDecimalPlaces(2).toNumber(),
+            processingFee: processingFee.toDecimalPlaces(2).toNumber(),
+            insuranceFee: insuranceFee.toDecimalPlaces(2).toNumber(),
+            total: total.toDecimalPlaces(2).toNumber(),
         };
     }
 
@@ -373,42 +382,51 @@ export class LoanService {
         startDate: Date = new Date()
     ): LoanInstallment[] {
         const schedule: LoanInstallment[] = [];
-        const monthlyRate = interestRate / 12 / 100;
+        const P = new Decimal(loanAmount);
+        const monthlyRate = new Decimal(interestRate).div(12).div(100);
+        let remainingBalance = P;
 
-        let remainingBalance = loanAmount;
+        // Pre-compute EMI for declining_emi using Decimal
+        let emi: Decimal | null = null;
+        if (interestMethod === 'declining_emi' && monthlyRate.gt(0)) {
+            const n = tenureMonths;
+            const onePlusR = Decimal.add(1, monthlyRate);
+            const onePlusRn = onePlusR.pow(n);
+            emi = P.mul(monthlyRate).mul(onePlusRn).div(onePlusRn.minus(1));
+        }
 
         for (let month = 1; month <= tenureMonths; month++) {
             const dueDate = new Date(startDate);
             dueDate.setMonth(dueDate.getMonth() + month);
 
-            let principalAmount = 0;
-            let interestAmount = 0;
+            let principalAmount: Decimal;
+            let interestAmount: Decimal;
 
             if (interestMethod === 'flat') {
-                principalAmount = loanAmount / tenureMonths;
-                interestAmount = loanAmount * monthlyRate;
-            } else if (interestMethod === 'declining_emi') {
-                // EMI formula: M = P[r(1+r)^n]/[(1+r)^n-1]
-                const n = tenureMonths;
-                const emi = (loanAmount * monthlyRate * Math.pow(1 + monthlyRate, n)) /
-                    (Math.pow(1 + monthlyRate, n) - 1);
-                interestAmount = remainingBalance * monthlyRate;
-                principalAmount = emi - interestAmount;
-            } else if (interestMethod === 'declining_principal') {
-                principalAmount = loanAmount / tenureMonths;
-                interestAmount = remainingBalance * monthlyRate;
+                principalAmount = P.div(tenureMonths);
+                interestAmount = P.mul(monthlyRate);
+            } else if (interestMethod === 'declining_emi' && emi) {
+                interestAmount = remainingBalance.mul(monthlyRate);
+                principalAmount = emi.minus(interestAmount);
+            } else {
+                // declining_principal
+                principalAmount = P.div(tenureMonths);
+                interestAmount = remainingBalance.mul(monthlyRate);
             }
 
-            remainingBalance -= principalAmount;
+            remainingBalance = remainingBalance.minus(principalAmount);
+
+            const pAmt = principalAmount.toDecimalPlaces(2).toNumber();
+            const iAmt = interestAmount.toDecimalPlaces(2).toNumber();
 
             const installment: LoanInstallment = {
                 id: `INST-${nanoid(12)}`,
                 loanAgreementId: '', // Will be set when creating loan
                 installmentNumber: month,
                 dueDate,
-                principalAmount,
-                interestAmount,
-                totalAmount: principalAmount + interestAmount,
+                principalAmount: pAmt,
+                interestAmount: iAmt,
+                totalAmount: new Decimal(pAmt).plus(iAmt).toNumber(),
                 paidAmount: 0,
                 penaltyAmount: 0,
                 status: 'pending',
@@ -442,40 +460,41 @@ export class LoanService {
         allocatedPrincipal: number;
         remaining: number;
     } {
-        let allocated = {
-            penalty: 0,
-            interest: 0,
-            principal: 0,
-            remaining: amount,
-        };
+        let remaining = new Decimal(amount);
+        let penalty = new Decimal(0);
+        let interest = new Decimal(0);
+        let principal = new Decimal(0);
 
         for (const type of allocationOrder) {
-            if (allocated.remaining <= 0) break;
+            if (remaining.lte(0)) break;
 
             switch (type) {
-                case 'penalty':
-                    const penaltyAlloc = Math.min(allocated.remaining, pendingPenalty);
-                    allocated.penalty += penaltyAlloc;
-                    allocated.remaining -= penaltyAlloc;
+                case 'penalty': {
+                    const alloc = Decimal.min(remaining, new Decimal(pendingPenalty));
+                    penalty = penalty.plus(alloc);
+                    remaining = remaining.minus(alloc);
                     break;
-                case 'interest':
-                    const interestAlloc = Math.min(allocated.remaining, pendingInterest);
-                    allocated.interest += interestAlloc;
-                    allocated.remaining -= interestAlloc;
+                }
+                case 'interest': {
+                    const alloc = Decimal.min(remaining, new Decimal(pendingInterest));
+                    interest = interest.plus(alloc);
+                    remaining = remaining.minus(alloc);
                     break;
-                case 'principal':
-                    const principalAlloc = Math.min(allocated.remaining, pendingPrincipal);
-                    allocated.principal += principalAlloc;
-                    allocated.remaining -= principalAlloc;
+                }
+                case 'principal': {
+                    const alloc = Decimal.min(remaining, new Decimal(pendingPrincipal));
+                    principal = principal.plus(alloc);
+                    remaining = remaining.minus(alloc);
                     break;
+                }
             }
         }
 
         return {
-            allocatedPenalty: allocated.penalty,
-            allocatedInterest: allocated.interest,
-            allocatedPrincipal: allocated.principal,
-            remaining: allocated.remaining,
+            allocatedPenalty: penalty.toDecimalPlaces(2).toNumber(),
+            allocatedInterest: interest.toDecimalPlaces(2).toNumber(),
+            allocatedPrincipal: principal.toDecimalPlaces(2).toNumber(),
+            remaining: remaining.toDecimalPlaces(2).toNumber(),
         };
     }
 
@@ -488,8 +507,12 @@ export class LoanService {
         penaltyRate: number,
         daysOverdue: number
     ): number {
+        // Guard against negative inputs that could produce credits
+        const safeAmount = Decimal.max(0, new Decimal(outstandingAmount));
+        const safeRate = Decimal.max(0, new Decimal(penaltyRate));
+        const safeDays = Math.max(0, daysOverdue);
         // Daily penalty calculation
-        return outstandingAmount * (penaltyRate / 100) * daysOverdue;
+        return safeAmount.mul(safeRate).div(100).mul(safeDays).toDecimalPlaces(2).toNumber();
     }
 
     /**
@@ -511,8 +534,7 @@ export class LoanService {
         dueDate: Date,
         daysUntilDue: number
     ): { sms: string; email: string } {
-        const sms = `Loan ${loanNumber} payment of ${amount} due ${dueDate.toLocaleDateString()}. ' +
-            'Visit portal to pay. Contact us for help.`;
+        const sms = `Loan ${loanNumber} payment of ${amount} due ${dueDate.toLocaleDateString()}. Visit portal to pay. Contact us for help.`;
 
         const emailSubject = `Payment Reminder - Loan ${loanNumber}`;
         const emailBody = `
@@ -539,8 +561,11 @@ Please make the payment on or before the due date to avoid penalties.
         totalMonths: number
     ): number {
         // Pro-rata rebate for remaining months
-        const rebatePercent = monthsRemaining / totalMonths;
-        return totalInterestScheduled * rebatePercent;
+        return new Decimal(totalInterestScheduled)
+            .mul(monthsRemaining)
+            .div(totalMonths)
+            .toDecimalPlaces(2)
+            .toNumber();
     }
 }
 
