@@ -12,7 +12,10 @@
  */
 
 import { nanoid } from 'nanoid';
+import Decimal from 'decimal.js';
 import { appLogger } from '../middleware/logger';
+
+Decimal.set({ precision: 20, rounding: Decimal.ROUND_HALF_UP });
 
 /**
  * Account type in chart of accounts
@@ -286,25 +289,27 @@ export class AccountingService {
         if (amount <= 0) {
             throw new Error('Deposit amount must be positive');
         }
-        // Deposits increase member savings (asset) and are sourced from cash/bank
+        // Deposits increase the SACCO's cash (asset) and member savings liability.
+        // Debit: Cash/Bank (asset increases)
+        // Credit: Member Savings (liability increases)
         const cashAccountCode = this.getCashAccountForChannel(channel);
 
         return {
-            id: `AUTO-${Date.now()}`,
+            id: `AUTO-${nanoid(12)}`,
             tenantId: '', // Will be set by caller
             entryDate: new Date(),
-            reference: `DEP-${memberId}-${Date.now()}`,
+            reference: `DEP-${memberId}-${nanoid(8)}`,
             description: `Deposit from member ${memberId} via ${channel}`,
             lineItems: [
                 {
-                    accountCode: depositAccountCode,
-                    accountName: 'Member Savings Account',
+                    accountCode: cashAccountCode,
+                    accountName: 'Cash / Bank',
                     debit: amount,
                     credit: 0,
                 },
                 {
-                    accountCode: cashAccountCode,
-                    accountName: 'Cash / Bank',
+                    accountCode: depositAccountCode,
+                    accountName: 'Member Savings Account',
                     debit: 0,
                     credit: amount,
                 },
@@ -330,7 +335,7 @@ export class AccountingService {
         }
         // Loan disbursement reduces cash/bank and increases loan receivables
         return {
-            id: `AUTO-${Date.now()}`,
+            id: `AUTO-${nanoid(12)}`,
             tenantId: '', // Will be set by caller
             entryDate: new Date(),
             reference: `LDB-${loanId}`,
@@ -367,7 +372,7 @@ export class AccountingService {
             throw new Error('Interest amount must be positive');
         }
         return {
-            id: `AUTO-${Date.now()}`,
+            id: `AUTO-${nanoid(12)}`,
             tenantId: '', // Will be set by caller
             entryDate: new Date(),
             reference: `INT-${loanId}`,
@@ -414,15 +419,15 @@ export class AccountingService {
      * Requirement: ACC-008
      */
     generateTrialBalance(postings: GLPosting[], accounts: ChartOfAccount[]): TrialBalance {
-        const accountBalances: Record<string, { debit: number; credit: number }> = {};
+        const accountBalances: Record<string, { debit: Decimal; credit: Decimal }> = {};
 
-        // Sum balances
+        // Sum balances using Decimal for precision
         for (const posting of postings) {
             if (!accountBalances[posting.accountCode]) {
-                accountBalances[posting.accountCode] = { debit: 0, credit: 0 };
+                accountBalances[posting.accountCode] = { debit: new Decimal(0), credit: new Decimal(0) };
             }
-            accountBalances[posting.accountCode].debit += posting.debit;
-            accountBalances[posting.accountCode].credit += posting.credit;
+            accountBalances[posting.accountCode].debit = accountBalances[posting.accountCode].debit.plus(posting.debit);
+            accountBalances[posting.accountCode].credit = accountBalances[posting.accountCode].credit.plus(posting.credit);
         }
 
         // Build report lines
@@ -434,20 +439,20 @@ export class AccountingService {
                     code: a.code,
                     name: a.name,
                     type: a.accountType,
-                    debitBalance: a.normalBalance === 'debit' ? balance.debit - balance.credit : 0,
-                    creditBalance: a.normalBalance === 'credit' ? balance.credit - balance.debit : 0,
+                    debitBalance: a.normalBalance === 'debit' ? balance.debit.minus(balance.credit).toNumber() : 0,
+                    creditBalance: a.normalBalance === 'credit' ? balance.credit.minus(balance.debit).toNumber() : 0,
                 };
             });
 
-        const totalDebits = lines.reduce((sum, l) => sum + l.debitBalance, 0);
-        const totalCredits = lines.reduce((sum, l) => sum + l.creditBalance, 0);
+        const totalDebits = lines.reduce((sum, l) => new Decimal(sum).plus(l.debitBalance), new Decimal(0));
+        const totalCredits = lines.reduce((sum, l) => new Decimal(sum).plus(l.creditBalance), new Decimal(0));
 
         return {
             generatedAt: new Date(),
             accounts: lines,
-            totalDebits,
-            totalCredits,
-            balanced: Math.abs(totalDebits - totalCredits) < 0.01,
+            totalDebits: totalDebits.toNumber(),
+            totalCredits: totalCredits.toNumber(),
+            balanced: totalDebits.minus(totalCredits).abs().lt(0.01),
         };
     }
 
@@ -461,33 +466,37 @@ export class AccountingService {
         periodStart: Date,
         periodEnd: Date
     ): IncomeStatement {
-        const revenue: Record<string, number> = {};
-        const expenses: Record<string, number> = {};
+        const revenue: Record<string, Decimal> = {};
+        const expenses: Record<string, Decimal> = {};
 
-        // Sum revenue and expenses
+        // Sum revenue and expenses using net amounts to handle contra entries
         for (const posting of postings) {
             const account = accounts.find(a => a.code === posting.accountCode);
             if (!account) continue;
 
             if (account.accountType === 'income') {
-                revenue[account.category] = (revenue[account.category] || 0) + posting.credit;
+                // Income normal balance is credit; contra entries post to debit
+                const netIncome = new Decimal(posting.credit).minus(posting.debit);
+                revenue[account.category] = (revenue[account.category] || new Decimal(0)).plus(netIncome);
             } else if (account.accountType === 'expense') {
-                expenses[account.category] = (expenses[account.category] || 0) + posting.debit;
+                // Expense normal balance is debit; contra entries post to credit
+                const netExpense = new Decimal(posting.debit).minus(posting.credit);
+                expenses[account.category] = (expenses[account.category] || new Decimal(0)).plus(netExpense);
             }
         }
 
-        const totalRevenue = Object.values(revenue).reduce((a, b) => a + b, 0);
-        const totalExpenses = Object.values(expenses).reduce((a, b) => a + b, 0);
+        const totalRevenue = Object.values(revenue).reduce((a, b) => a.plus(b), new Decimal(0));
+        const totalExpenses = Object.values(expenses).reduce((a, b) => a.plus(b), new Decimal(0));
 
         return {
             generatedAt: new Date(),
             periodStart,
             periodEnd,
-            revenue: Object.entries(revenue).map(([cat, amt]) => ({ category: cat, amount: amt })),
-            totalRevenue,
-            expenses: Object.entries(expenses).map(([cat, amt]) => ({ category: cat, amount: amt })),
-            totalExpenses,
-            netIncome: totalRevenue - totalExpenses,
+            revenue: Object.entries(revenue).map(([cat, amt]) => ({ category: cat, amount: amt.toNumber() })),
+            totalRevenue: totalRevenue.toNumber(),
+            expenses: Object.entries(expenses).map(([cat, amt]) => ({ category: cat, amount: amt.toNumber() })),
+            totalExpenses: totalExpenses.toNumber(),
+            netIncome: totalRevenue.minus(totalExpenses).toNumber(),
         };
     }
 
@@ -499,12 +508,12 @@ export class AccountingService {
         postings: GLPosting[],
         accounts: ChartOfAccount[]
     ): BalanceSheet {
-        const assets: Record<string, number> = {};
-        const liabilities: Record<string, number> = {};
-        const equity: Record<string, number> = {};
+        const assets: Record<string, Decimal> = {};
+        const liabilities: Record<string, Decimal> = {};
+        const equity: Record<string, Decimal> = {};
 
-        // Sum by type
-        const typeBalances: Record<AccountType, Record<string, number>> = {
+        // Sum by type using Decimal for precision
+        const typeBalances: Record<AccountType, Record<string, Decimal>> = {
             asset: assets,
             liability: liabilities,
             equity: equity,
@@ -519,26 +528,25 @@ export class AccountingService {
             const typeMap = typeBalances[account.accountType];
             if (!typeMap) continue;
 
-            const netDebit = posting.debit - posting.credit;
-            typeMap[account.category] = (typeMap[account.category] || 0) + (
-                account.normalBalance === 'debit' ? netDebit : -netDebit
-            );
+            const netDebit = new Decimal(posting.debit).minus(posting.credit);
+            const contribution = account.normalBalance === 'debit' ? netDebit : netDebit.neg();
+            typeMap[account.category] = (typeMap[account.category] || new Decimal(0)).plus(contribution);
         }
 
-        const totalAssets = Object.values(assets).reduce((a, b) => a + b, 0);
-        const totalLiabilities = Object.values(liabilities).reduce((a, b) => a + b, 0);
-        const totalEquity = Object.values(equity).reduce((a, b) => a + b, 0);
+        const totalAssets = Object.values(assets).reduce((a, b) => a.plus(b), new Decimal(0));
+        const totalLiabilities = Object.values(liabilities).reduce((a, b) => a.plus(b), new Decimal(0));
+        const totalEquity = Object.values(equity).reduce((a, b) => a.plus(b), new Decimal(0));
 
         return {
             generatedAt: new Date(),
             asOfDate: new Date(),
-            assets: Object.entries(assets).map(([cat, amt]) => ({ category: cat, amount: amt })),
-            totalAssets,
-            liabilities: Object.entries(liabilities).map(([cat, amt]) => ({ category: cat, amount: amt })),
-            totalLiabilities,
-            equity: Object.entries(equity).map(([cat, amt]) => ({ category: cat, amount: amt })),
-            totalEquity,
-            totalLiabilitiesAndEquity: totalLiabilities + totalEquity,
+            assets: Object.entries(assets).map(([cat, amt]) => ({ category: cat, amount: amt.toNumber() })),
+            totalAssets: totalAssets.toNumber(),
+            liabilities: Object.entries(liabilities).map(([cat, amt]) => ({ category: cat, amount: amt.toNumber() })),
+            totalLiabilities: totalLiabilities.toNumber(),
+            equity: Object.entries(equity).map(([cat, amt]) => ({ category: cat, amount: amt.toNumber() })),
+            totalEquity: totalEquity.toNumber(),
+            totalLiabilitiesAndEquity: totalLiabilities.plus(totalEquity).toNumber(),
         };
     }
 
