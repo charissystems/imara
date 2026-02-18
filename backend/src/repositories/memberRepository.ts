@@ -9,6 +9,7 @@ export class MemberRepository extends BaseRepository {
 				.selectFrom('members')
 				.selectAll()
 				.where('id', '=', id)
+				.where('deleted_at', 'is', null)
 				.executeTakeFirst(),
 			'findById',
 			{ memberId: id }
@@ -21,6 +22,7 @@ export class MemberRepository extends BaseRepository {
 				.selectFrom('members')
 				.selectAll()
 				.where('member_number', '=', memberNumber)
+				.where('deleted_at', 'is', null)
 				.executeTakeFirst(),
 			'findByMemberNumber',
 			{ memberNumber }
@@ -30,7 +32,8 @@ export class MemberRepository extends BaseRepository {
 	async findAll(status?: Member['status']): Promise<Member[]> {
 		return this.executeSafely(
 			async () => {
-				let query = this.db.selectFrom('members').selectAll();
+				let query = this.db.selectFrom('members').selectAll()
+					.where('deleted_at', 'is', null);
 				if (status) {
 					query = query.where('status', '=', status);
 				}
@@ -59,6 +62,7 @@ export class MemberRepository extends BaseRepository {
 				.updateTable('members')
 				.set(updates)
 				.where('id', '=', id)
+				.where('deleted_at', 'is', null)
 				.returningAll()
 				.executeTakeFirstOrThrow(),
 			'update',
