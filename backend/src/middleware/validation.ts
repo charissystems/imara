@@ -95,4 +95,15 @@ export const commonSchemas = {
     search: z.object({
         q: z.string().min(1).max(200),
     }),
+
+    /**
+     * Standard payment method enum used across deposits, repayments,
+     * fixed deposits, and share purchases.
+     */
+    paymentMethod: z.enum(['cash', 'mobile_money', 'bank_transfer', 'cheque', 'internal']),
+
+    /**
+     * Payment method that also includes savings_deduction (used in share purchases).
+     */
+    paymentMethodWithSavings: z.enum(['cash', 'mobile_money', 'bank_transfer', 'cheque', 'internal', 'savings_deduction']),
 };

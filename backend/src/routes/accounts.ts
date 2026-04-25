@@ -7,9 +7,9 @@ import { validate, getValidatedData, commonSchemas } from '../middleware/validat
 import { ValidationError, NotFoundError, UnauthorizedError } from '../middleware/errorHandler';
 import { AccountRepository } from '../repositories/accountRepository';
 import { SavingsService } from '../services/savingsService';
-import { hasPermission, enforcePermission } from '../middleware/rbac';
+import { enforcePermission } from '../middleware/rbac';
 import { rateLimit } from '../middleware/rateLimiter';
-import { getTenantDb } from '../config/database';
+import { getTenantContext } from '../utils/routeHelpers';
 
 export const accountRoutes = new Hono<Env>();
 
@@ -27,7 +27,7 @@ const depositSchema = z.object({
     savings_account_id: commonSchemas.uuid,
     member_id: commonSchemas.uuid,
     amount: z.number().positive('Amount must be positive'),
-    payment_method: z.enum(['cash', 'mobile_money', 'bank_transfer', 'cheque', 'internal']),
+    payment_method: commonSchemas.paymentMethod,
     payment_reference: z.string().optional(),
     description: z.string().optional(),
 });
@@ -58,7 +58,7 @@ const batchDepositSchema = z.object({
         savings_account_id: commonSchemas.uuid,
         member_id: commonSchemas.uuid,
         amount: z.number().positive(),
-        payment_method: z.enum(['cash', 'mobile_money', 'bank_transfer', 'cheque', 'internal']),
+        payment_method: commonSchemas.paymentMethod,
         payment_reference: z.string().optional(),
         description: z.string().optional(),
     })).min(1, 'At least one deposit required').max(500, 'Maximum 500 deposits per batch'),
@@ -95,26 +95,22 @@ const updateSavingsProductSchema = z.object({
  * List all accounts for current member (or all accounts if admin)
  */
 accountRoutes.get('/', enforcePermission('savings', 'read'), async (c) => {
-    try {
-        const { schema_name } = c.get('tenant')!;
-        const currentUser = c.get('user');
-        const accountRepo = new AccountRepository(schema_name);
+    const { schema_name, db } = getTenantContext(c);
+    const currentUser = c.get('user');
+    const accountRepo = new AccountRepository(schema_name);
 
-        let accounts;
-        if (currentUser?.role === 'member') {
-            accounts = await accountRepo.findAccountsByMemberId(currentUser.id);
-        } else {
-            accounts = await accountRepo.findAllAccounts();
-        }
-
-        return c.json({
-            success: true,
-            data: accounts,
-            meta: { count: accounts.length }
-        });
-    } catch (error) {
-        throw error;
+    let accounts;
+    if (currentUser?.role === 'member') {
+        accounts = await accountRepo.findAccountsByMemberId(currentUser.id);
+    } else {
+        accounts = await accountRepo.findAllAccounts();
     }
+
+    return c.json({
+        success: true,
+        data: accounts,
+        meta: { count: accounts.length }
+    });
 });
 
 // =============================================================================
@@ -126,31 +122,27 @@ accountRoutes.get('/', enforcePermission('savings', 'read'), async (c) => {
  * List all savings products
  */
 accountRoutes.get('/products', async (c) => {
-    try {
-        const db = c.get('db')!;
-        const activeOnly = c.req.query('active') === 'true';
-        const limit = Math.min(parseInt(c.req.query('limit') || '100', 10), 200);
-        const offset = Math.max(parseInt(c.req.query('offset') || '0', 10), 0);
+    const db = c.get('db')!;
+    const activeOnly = c.req.query('active') === 'true';
+    const limit = Math.min(parseInt(c.req.query('limit') || '100', 10), 200);
+    const offset = Math.max(parseInt(c.req.query('offset') || '0', 10), 0);
 
-        let query = db
-            .selectFrom('savings_products')
-            .selectAll()
-            .where('deleted_at', 'is', null);
+    let query = db
+        .selectFrom('savings_products')
+        .selectAll()
+        .where('deleted_at', 'is', null);
 
-        if (activeOnly) {
-            query = query.where('is_active', '=', true);
-        }
-
-        const products = await query.orderBy('name', 'asc').limit(limit).offset(offset).execute();
-
-        return c.json({
-            success: true,
-            data: products,
-            meta: { count: products.length },
-        });
-    } catch (error) {
-        throw error;
+    if (activeOnly) {
+        query = query.where('is_active', '=', true);
     }
+
+    const products = await query.orderBy('name', 'asc').limit(limit).offset(offset).execute();
+
+    return c.json({
+        success: true,
+        data: products,
+        meta: { count: products.length },
+    });
 });
 
 /**
@@ -158,105 +150,83 @@ accountRoutes.get('/products', async (c) => {
  * Get savings product details
  */
 accountRoutes.get('/products/:productId', async (c) => {
-    try {
-        const { productId } = c.req.param();
-        const db = c.get('db')!;
+    const { productId } = c.req.param();
+    const db = c.get('db')!;
 
-        const product = await db
-            .selectFrom('savings_products')
-            .selectAll()
-            .where('id', '=', productId)
-            .where('deleted_at', 'is', null)
-            .executeTakeFirst();
+    const product = await db
+        .selectFrom('savings_products')
+        .selectAll()
+        .where('id', '=', productId)
+        .where('deleted_at', 'is', null)
+        .executeTakeFirst();
 
-        if (!product) {
-            throw new NotFoundError('SavingsProduct', productId);
-        }
-
-        return c.json({ success: true, data: product });
-    } catch (error) {
-        throw error;
+    if (!product) {
+        throw new NotFoundError('SavingsProduct', productId);
     }
+
+    return c.json({ success: true, data: product });
 });
 
 /**
  * POST /accounts/products
  * Create a new savings product (admin only)
  */
-accountRoutes.post('/products', validate(createSavingsProductSchema), async (c) => {
-    try {
-        const data = getValidatedData<z.infer<typeof createSavingsProductSchema>>(c);
-        const user = c.get('user');
-        const db = c.get('db')!;
+accountRoutes.post('/products', enforcePermission('savings_products', 'create'), validate(createSavingsProductSchema), async (c) => {
+    const data = getValidatedData<z.infer<typeof createSavingsProductSchema>>(c);
+    const db = c.get('db')!;
 
-        if (!user || !hasPermission(user.role || '', 'savings_products', 'create')) {
-            throw new UnauthorizedError('Insufficient permissions');
-        }
+    const product = await db
+        .insertInto('savings_products')
+        .values({
+            code: data.code,
+            name: data.name,
+            description: data.description || null,
+            interest_rate: String(data.interest_rate) as any,
+            interest_paid_frequency: data.interest_paid_frequency as any,
+            interest_calculation_method: (data.interest_calculation_method || 'simple') as any,
+            minimum_balance: String(data.minimum_balance ?? 0) as any,
+            maximum_balance: data.maximum_balance ? String(data.maximum_balance) as any : null,
+            allows_overdraft: data.allows_overdraft ?? false,
+            overdraft_limit: String(data.overdraft_limit ?? 0) as any,
+            is_active: true,
+            created_by: user.id,
+        } as any)
+        .returningAll()
+        .executeTakeFirstOrThrow();
 
-        const product = await db
-            .insertInto('savings_products')
-            .values({
-                code: data.code,
-                name: data.name,
-                description: data.description || null,
-                interest_rate: String(data.interest_rate) as any,
-                interest_paid_frequency: data.interest_paid_frequency as any,
-                interest_calculation_method: (data.interest_calculation_method || 'simple') as any,
-                minimum_balance: String(data.minimum_balance ?? 0) as any,
-                maximum_balance: data.maximum_balance ? String(data.maximum_balance) as any : null,
-                allows_overdraft: data.allows_overdraft ?? false,
-                overdraft_limit: String(data.overdraft_limit ?? 0) as any,
-                is_active: true,
-                created_by: user.id,
-            } as any)
-            .returningAll()
-            .executeTakeFirstOrThrow();
-
-        return c.json({
-            success: true,
-            data: product,
-            meta: { created: true },
-        }, 201);
-    } catch (error) {
-        throw error;
-    }
+    return c.json({
+        success: true,
+        data: product,
+        meta: { created: true },
+    }, 201);
 });
 
 /**
  * PATCH /accounts/products/:productId
  * Update a savings product
  */
-accountRoutes.patch('/products/:productId', validate(updateSavingsProductSchema), async (c) => {
-    try {
-        const { productId } = c.req.param();
-        const data = getValidatedData<z.infer<typeof updateSavingsProductSchema>>(c);
-        const user = c.get('user');
-        const db = c.get('db')!;
+accountRoutes.patch('/products/:productId', enforcePermission('savings_products', 'update'), validate(updateSavingsProductSchema), async (c) => {
+    const { productId } = c.req.param();
+    const data = getValidatedData<z.infer<typeof updateSavingsProductSchema>>(c);
+    const db = c.get('db')!;
 
-        if (!user || !hasPermission(user.role || '', 'savings_products', 'update')) {
-            throw new UnauthorizedError('Insufficient permissions');
-        }
+    const updates: Record<string, any> = { updated_at: new Date() };
+    if (data.name !== undefined) updates.name = data.name;
+    if (data.description !== undefined) updates.description = data.description;
+    if (data.interest_rate !== undefined) updates.interest_rate = String(data.interest_rate);
+    if (data.minimum_balance !== undefined) updates.minimum_balance = String(data.minimum_balance);
+    if (data.maximum_balance !== undefined) updates.maximum_balance = String(data.maximum_balance);
+    if (data.is_active !== undefined) updates.is_active = data.is_active;
 
-        const updates: Record<string, any> = { updated_at: new Date() };
-        if (data.name !== undefined) updates.name = data.name;
-        if (data.description !== undefined) updates.description = data.description;
-        if (data.interest_rate !== undefined) updates.interest_rate = String(data.interest_rate);
-        if (data.minimum_balance !== undefined) updates.minimum_balance = String(data.minimum_balance);
-        if (data.maximum_balance !== undefined) updates.maximum_balance = String(data.maximum_balance);
-        if (data.is_active !== undefined) updates.is_active = data.is_active;
+    const product = await db
+        .updateTable('savings_products')
+        .set(updates as any)
+        .where('id', '=', productId)
+        .where('deleted_at', 'is', null)
+        .returningAll()
+        .executeTakeFirstOrThrow();
 
-        const product = await db
-            .updateTable('savings_products')
-            .set(updates as any)
-            .where('id', '=', productId)
-            .where('deleted_at', 'is', null)
-            .returningAll()
-            .executeTakeFirstOrThrow();
-
-        return c.json({ success: true, data: product });
-    } catch (error) {
-        throw error;
-    }
+    return c.json({ success: true, data: product });
 });
 
 /**
@@ -264,29 +234,25 @@ accountRoutes.patch('/products/:productId', validate(updateSavingsProductSchema)
  * Get account details
  */
 accountRoutes.get('/:accountId', async (c) => {
-    try {
-        const { accountId } = c.req.param();
-        const { schema_name } = c.get('tenant')!;
-        const currentUser = c.get('user');
-        const accountRepo = new AccountRepository(schema_name);
+    const { accountId } = c.req.param();
+    const { schema_name, db } = getTenantContext(c);
+    const currentUser = c.get('user');
+    const accountRepo = new AccountRepository(schema_name);
 
-        const account = await accountRepo.findById(accountId);
-        if (!account) {
-            throw new NotFoundError('Account', accountId);
-        }
-
-        // Authorization: member can only see own account
-        if (currentUser?.role === 'member' && account.member_id !== currentUser.id) {
-            throw new UnauthorizedError('Cannot access other members\' accounts');
-        }
-
-        return c.json({
-            success: true,
-            data: account
-        });
-    } catch (error) {
-        throw error;
+    const account = await accountRepo.findById(accountId);
+    if (!account) {
+        throw new NotFoundError('Account', accountId);
     }
+
+    // Authorization: member can only see own account
+    if (currentUser?.role === 'member' && account.member_id !== currentUser.id) {
+        throw new UnauthorizedError('Cannot access other members\' accounts');
+    }
+
+    return c.json({
+        success: true,
+        data: account
+    });
 });
 
 /**
@@ -294,37 +260,33 @@ accountRoutes.get('/:accountId', async (c) => {
  * Create a new savings account
  */
 accountRoutes.post('/', validate(createAccountSchema), async (c) => {
-    try {
-        const data = getValidatedData<z.infer<typeof createAccountSchema>>(c);
-        const { schema_name } = c.get('tenant')!;
-        const currentUser = c.get('user');
-        const accountRepo = new AccountRepository(schema_name);
+    const data = getValidatedData<z.infer<typeof createAccountSchema>>(c);
+    const { schema_name, db } = getTenantContext(c);
+    const currentUser = c.get('user');
+    const accountRepo = new AccountRepository(schema_name);
 
-        // Authorization: member creates own account, admin creates for others
-        if (currentUser?.role === 'member' && data.member_id !== currentUser.id) {
-            throw new UnauthorizedError('Members can only create their own accounts');
-        }
-
-        const account = await accountRepo.create({
-            member_id: data.member_id,
-            product_id: data.product_id,
-            account_number: data.account_number,
-            status: 'active',
-            principal_balance: '0',
-            interest_accrued: '0',
-            interest_paid: '0',
-            opened_date: new Date(),
-            created_by: currentUser?.id,
-        } as any);
-
-        return c.json({
-            success: true,
-            data: account,
-            meta: { created: true }
-        }, 201);
-    } catch (error) {
-        throw error;
+    // Authorization: member creates own account, admin creates for others
+    if (currentUser?.role === 'member' && data.member_id !== currentUser.id) {
+        throw new UnauthorizedError('Members can only create their own accounts');
     }
+
+    const account = await accountRepo.create({
+        member_id: data.member_id,
+        product_id: data.product_id,
+        account_number: data.account_number,
+        status: 'active',
+        principal_balance: '0',
+        interest_accrued: '0',
+        interest_paid: '0',
+        opened_date: new Date(),
+        created_by: currentUser?.id,
+    } as any);
+
+    return c.json({
+        success: true,
+        data: account,
+        meta: { created: true }
+    }, 201);
 });
 
 // =============================================================================
@@ -336,80 +298,75 @@ accountRoutes.post('/', validate(createAccountSchema), async (c) => {
  * Record a deposit
  */
 accountRoutes.post('/deposit', rateLimit({ maxRequests: 30, windowSeconds: 60, keyPrefix: 'rl:deposit' }), validate(depositSchema), async (c) => {
-    try {
-        const data = getValidatedData<z.infer<typeof depositSchema>>(c);
-        const { schema_name } = c.get('tenant')!;
-        const currentUser = c.get('user');
-        const accountRepo = new AccountRepository(schema_name);
-        const savingsService = new SavingsService();
+    const data = getValidatedData<z.infer<typeof depositSchema>>(c);
+    const { schema_name, db } = getTenantContext(c);
+    const currentUser = c.get('user');
+    const accountRepo = new AccountRepository(schema_name);
+    const savingsService = new SavingsService();
 
-        // Verify account exists
-        const account = await accountRepo.findById(data.savings_account_id);
-        if (!account) {
-            throw new NotFoundError('Account', data.savings_account_id);
-        }
-
-        // Validate that the member_id matches the account owner (prevent IDOR)
-        if (account.member_id !== data.member_id) {
-            throw new ValidationError('Member ID does not match the account owner');
-        }
-
-        // Execute deposit atomically in a database transaction
-        const db = getTenantDb(schema_name);
-        const depositNumber = savingsService.generateTransactionReference();
-
-        const result = await db.transaction().execute(async (trx) => {
-            // Re-read balance inside transaction for consistency
-            const freshAccount = await trx
-                .selectFrom('savings_accounts')
-                .select(['id', 'principal_balance'])
-                .where('id', '=', data.savings_account_id)
-                .executeTakeFirstOrThrow();
-
-            // Create deposit record
-            const deposit = await trx
-                .insertInto('deposits')
-                .values({
-                    savings_account_id: data.savings_account_id,
-                    member_id: data.member_id,
-                    deposit_number: depositNumber,
-                    amount: String(data.amount) as any,
-                    deposit_date: new Date() as any,
-                    payment_method: data.payment_method as any,
-                    payment_reference: data.payment_reference || null,
-                    status: 'posted' as any,
-                    description: data.description || null,
-                    recorded_by: currentUser?.id || null,
-                } as any)
-                .returningAll()
-                .executeTakeFirstOrThrow();
-
-            // Update account balance using Decimal for precision
-            const currentBalance = new Decimal(freshAccount.principal_balance?.toString() ?? '0');
-            const depositAmount = new Decimal(data.amount);
-            const newBalance = currentBalance.plus(depositAmount);
-
-            const updatedAccount = await trx
-                .updateTable('savings_accounts')
-                .set({
-                    principal_balance: newBalance.toString() as any,
-                    updated_at: new Date() as any,
-                } as any)
-                .where('id', '=', data.savings_account_id)
-                .returningAll()
-                .executeTakeFirstOrThrow();
-
-            return { deposit, account: updatedAccount };
-        });
-
-        return c.json({
-            success: true,
-            data: result,
-            meta: { deposited: true }
-        }, 201);
-    } catch (error) {
-        throw error;
+    // Verify account exists
+    const account = await accountRepo.findById(data.savings_account_id);
+    if (!account) {
+        throw new NotFoundError('Account', data.savings_account_id);
     }
+
+    // Validate that the member_id matches the account owner (prevent IDOR)
+    if (account.member_id !== data.member_id) {
+        throw new ValidationError('Member ID does not match the account owner');
+    }
+
+    // Execute deposit atomically in a database transaction
+    const depositNumber = savingsService.generateTransactionReference();
+
+    const result = await db.transaction().execute(async (trx) => {
+        // Re-read balance inside transaction for consistency
+        const freshAccount = await trx
+            .selectFrom('savings_accounts')
+            .select(['id', 'principal_balance'])
+            .where('id', '=', data.savings_account_id)
+            .executeTakeFirstOrThrow();
+
+        // Create deposit record
+        const deposit = await trx
+            .insertInto('deposits')
+            .values({
+                savings_account_id: data.savings_account_id,
+                member_id: data.member_id,
+                deposit_number: depositNumber,
+                amount: String(data.amount) as any,
+                deposit_date: new Date() as any,
+                payment_method: data.payment_method as any,
+                payment_reference: data.payment_reference || null,
+                status: 'posted' as any,
+                description: data.description || null,
+                recorded_by: currentUser?.id || null,
+            } as any)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+
+        // Update account balance using Decimal for precision
+        const currentBalance = new Decimal(freshAccount.principal_balance?.toString() ?? '0');
+        const depositAmount = new Decimal(data.amount);
+        const newBalance = currentBalance.plus(depositAmount);
+
+        const updatedAccount = await trx
+            .updateTable('savings_accounts')
+            .set({
+                principal_balance: newBalance.toString() as any,
+                updated_at: new Date() as any,
+            } as any)
+            .where('id', '=', data.savings_account_id)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+
+        return { deposit, account: updatedAccount };
+    });
+
+    return c.json({
+        success: true,
+        data: result,
+        meta: { deposited: true }
+    }, 201);
 });
 
 // =============================================================================
@@ -421,31 +378,26 @@ accountRoutes.post('/deposit', rateLimit({ maxRequests: 30, windowSeconds: 60, k
  * List withdrawal requests for an account
  */
 accountRoutes.get('/:accountId/withdrawals', async (c) => {
-    try {
-        const { accountId } = c.req.param();
-        const { schema_name } = c.get('tenant')!;
-        const limit = Math.min(parseInt(c.req.query('limit') || '100', 10), 200);
-        const offset = Math.max(parseInt(c.req.query('offset') || '0', 10), 0);
-        const db = getTenantDb(schema_name);
+    const { accountId } = c.req.param();
+    const { schema_name, db } = getTenantContext(c);
+    const limit = Math.min(parseInt(c.req.query('limit') || '100', 10), 200);
+    const offset = Math.max(parseInt(c.req.query('offset') || '0', 10), 0);
 
-        const withdrawals = await db
-            .selectFrom('withdrawals')
-            .selectAll()
-            .where('savings_account_id', '=', accountId)
-            .where('deleted_at', 'is', null)
-            .orderBy('created_at', 'desc')
-            .limit(limit)
-            .offset(offset)
-            .execute();
+    const withdrawals = await db
+        .selectFrom('withdrawals')
+        .selectAll()
+        .where('savings_account_id', '=', accountId)
+        .where('deleted_at', 'is', null)
+        .orderBy('created_at', 'desc')
+        .limit(limit)
+        .offset(offset)
+        .execute();
 
-        return c.json({
-            success: true,
-            data: withdrawals,
-            meta: { count: withdrawals.length, limit, offset }
-        });
-    } catch (error) {
-        throw error;
-    }
+    return c.json({
+        success: true,
+        data: withdrawals,
+        meta: { count: withdrawals.length, limit, offset }
+    });
 });
 
 /**
@@ -453,189 +405,174 @@ accountRoutes.get('/:accountId/withdrawals', async (c) => {
  * Request or record a withdrawal
  */
 accountRoutes.post('/withdrawal', rateLimit({ maxRequests: 20, windowSeconds: 60, keyPrefix: 'rl:withdrawal' }), validate(withdrawalSchema), async (c) => {
-    try {
-        const data = getValidatedData<z.infer<typeof withdrawalSchema>>(c);
-        const { schema_name } = c.get('tenant')!;
-        const currentUser = c.get('user');
-        const accountRepo = new AccountRepository(schema_name);
-        const savingsService = new SavingsService();
+    const data = getValidatedData<z.infer<typeof withdrawalSchema>>(c);
+    const { schema_name, db } = getTenantContext(c);
+    const currentUser = c.get('user');
+    const accountRepo = new AccountRepository(schema_name);
+    const savingsService = new SavingsService();
 
-        // Verify account exists
-        const account = await accountRepo.findById(data.savings_account_id);
-        if (!account) {
-            throw new NotFoundError('Account', data.savings_account_id);
-        }
-
-        // Validate that the member_id matches the account owner (prevent IDOR)
-        if (account.member_id !== data.member_id) {
-            throw new ValidationError('Member ID does not match the account owner');
-        }
-
-        // Authorization: member can only withdraw from own account
-        if (currentUser?.role === 'member' && account.member_id !== currentUser.id) {
-            throw new UnauthorizedError('Cannot withdraw from other members\' accounts');
-        }
-
-        // Validate sufficient balance
-        const currentBalance = new Decimal(account.principal_balance?.toString() ?? '0');
-        const withdrawalAmount = new Decimal(data.amount);
-        if (withdrawalAmount.gt(currentBalance)) {
-            return c.json({
-                success: false,
-                error: { code: 'INSUFFICIENT_FUNDS', message: 'Insufficient balance' }
-            }, 400);
-        }
-
-        // Check if withdrawal requires approval
-        const requiresApproval = savingsService.requiresWithdrawalApproval(data.amount);
-
-        const withdrawalNumber = savingsService.generateTransactionReference();
-
-        // Execute withdrawal atomically in a database transaction
-        const db = getTenantDb(schema_name);
-        const withdrawal = await db.transaction().execute(async (trx) => {
-            // Re-read balance inside transaction for consistency
-            const freshAccount = await trx
-                .selectFrom('savings_accounts')
-                .select(['id', 'principal_balance'])
-                .where('id', '=', data.savings_account_id)
-                .executeTakeFirstOrThrow();
-
-            const freshBalance = new Decimal(freshAccount.principal_balance?.toString() ?? '0');
-            const amount = new Decimal(data.amount);
-
-            if (amount.gt(freshBalance)) {
-                throw new ValidationError('Insufficient balance');
-            }
-
-            // Create withdrawal record
-            const w = await trx
-                .insertInto('withdrawals')
-                .values({
-                    savings_account_id: data.savings_account_id,
-                    member_id: data.member_id,
-                    withdrawal_number: withdrawalNumber,
-                    amount: String(data.amount) as any,
-                    withdrawal_date: new Date() as any,
-                    payout_method: data.payout_method as any,
-                    payout_reference: data.payout_reference || null,
-                    payout_account: data.payout_account || null,
-                    status: (requiresApproval ? 'pending' : 'completed') as any,
-                    description: data.description || null,
-                    requested_by: currentUser?.id || null,
-                } as any)
-                .returningAll()
-                .executeTakeFirstOrThrow();
-
-            // If no approval required, update balance immediately
-            if (!requiresApproval) {
-                const newBalance = freshBalance.minus(amount);
-                await trx
-                    .updateTable('savings_accounts')
-                    .set({
-                        principal_balance: newBalance.toString() as any,
-                        updated_at: new Date() as any,
-                    } as any)
-                    .where('id', '=', data.savings_account_id)
-                    .execute();
-            }
-
-            return w;
-        });
-
-        return c.json({
-            success: true,
-            data: withdrawal,
-            meta: {
-                requiresApproval,
-                status: requiresApproval ? 'pending' : 'completed'
-            }
-        }, 201);
-    } catch (error) {
-        throw error;
+    // Verify account exists
+    const account = await accountRepo.findById(data.savings_account_id);
+    if (!account) {
+        throw new NotFoundError('Account', data.savings_account_id);
     }
-});
 
-/**
- * PATCH /accounts/withdrawals/:withdrawalId/approve
- * Approve a pending withdrawal
- */
-accountRoutes.patch('/withdrawals/:withdrawalId/approve', async (c) => {
-    try {
-        const { withdrawalId } = c.req.param();
-        const { schema_name } = c.get('tenant')!;
-        const user = c.get('user');
+    // Validate that the member_id matches the account owner (prevent IDOR)
+    if (account.member_id !== data.member_id) {
+        throw new ValidationError('Member ID does not match the account owner');
+    }
 
-        if (!user || !hasPermission(user.role || '', 'withdrawals', 'approve')) {
-            throw new UnauthorizedError('Insufficient permissions to approve withdrawals');
+    // Authorization: member can only withdraw from own account
+    if (currentUser?.role === 'member' && account.member_id !== currentUser.id) {
+        throw new UnauthorizedError('Cannot withdraw from other members\' accounts');
+    }
+
+    // Validate sufficient balance
+    const currentBalance = new Decimal(account.principal_balance?.toString() ?? '0');
+    const withdrawalAmount = new Decimal(data.amount);
+    if (withdrawalAmount.gt(currentBalance)) {
+        return c.json({
+            success: false,
+            error: { code: 'INSUFFICIENT_FUNDS', message: 'Insufficient balance' }
+        }, 400);
+    }
+
+    // Check if withdrawal requires approval
+    const requiresApproval = savingsService.requiresWithdrawalApproval(data.amount);
+
+    const withdrawalNumber = savingsService.generateTransactionReference();
+
+    // Execute withdrawal atomically in a database transaction
+    const withdrawal = await db.transaction().execute(async (trx) => {
+        // Re-read balance inside transaction for consistency
+        const freshAccount = await trx
+            .selectFrom('savings_accounts')
+            .select(['id', 'principal_balance'])
+            .where('id', '=', data.savings_account_id)
+            .executeTakeFirstOrThrow();
+
+        const freshBalance = new Decimal(freshAccount.principal_balance?.toString() ?? '0');
+        const amount = new Decimal(data.amount);
+
+        if (amount.gt(freshBalance)) {
+            throw new ValidationError('Insufficient balance');
         }
 
-        const accountRepo = new AccountRepository(schema_name);
+        // Create withdrawal record
+        const w = await trx
+            .insertInto('withdrawals')
+            .values({
+                savings_account_id: data.savings_account_id,
+                member_id: data.member_id,
+                withdrawal_number: withdrawalNumber,
+                amount: String(data.amount) as any,
+                withdrawal_date: new Date() as any,
+                payout_method: data.payout_method as any,
+                payout_reference: data.payout_reference || null,
+                payout_account: data.payout_account || null,
+                status: (requiresApproval ? 'pending' : 'completed') as any,
+                description: data.description || null,
+                requested_by: currentUser?.id || null,
+            } as any)
+            .returningAll()
+            .executeTakeFirstOrThrow();
 
-        const withdrawal = await accountRepo.findWithdrawalById(withdrawalId);
-        if (!withdrawal) {
-            throw new NotFoundError('Withdrawal', withdrawalId);
-        }
-
-        if (withdrawal.status !== 'pending') {
-            return c.json({
-                success: false,
-                error: { code: 'INVALID_STATUS', message: 'Withdrawal is not pending' }
-            }, 400);
-        }
-
-        // Approve withdrawal atomically: check balance BEFORE setting status
-        const db = getTenantDb(schema_name);
-        const result = await db.transaction().execute(async (trx) => {
-            // Lock and read account balance inside transaction
-            const account = await trx
-                .selectFrom('savings_accounts')
-                .selectAll()
-                .where('id', '=', withdrawal.savings_account_id)
-                .executeTakeFirstOrThrow();
-
-            const currentBalance = new Decimal(account.principal_balance?.toString() ?? '0');
-            const withdrawalAmount = new Decimal(withdrawal.amount?.toString() ?? '0');
-
-            if (withdrawalAmount.gt(currentBalance)) {
-                throw new ValidationError(
-                    `Insufficient balance. Available: ${currentBalance.toFixed(2)}, Withdrawal: ${withdrawalAmount.toFixed(2)}`
-                );
-            }
-
-            // Deduct balance and approve atomically
-            const newBalance = currentBalance.minus(withdrawalAmount);
+        // If no approval required, update balance immediately
+        if (!requiresApproval) {
+            const newBalance = freshBalance.minus(amount);
             await trx
                 .updateTable('savings_accounts')
                 .set({
                     principal_balance: newBalance.toString() as any,
                     updated_at: new Date() as any,
                 } as any)
-                .where('id', '=', withdrawal.savings_account_id)
+                .where('id', '=', data.savings_account_id)
                 .execute();
+        }
 
-            const updated = await trx
-                .updateTable('withdrawals')
-                .set({
-                    status: 'approved' as any,
-                    approved_by: user.id,
-                    approved_at: new Date() as any,
-                } as any)
-                .where('id', '=', withdrawalId)
-                .returningAll()
-                .executeTakeFirstOrThrow();
+        return w;
+    });
 
-            return updated;
-        });
+    return c.json({
+        success: true,
+        data: withdrawal,
+        meta: {
+            requiresApproval,
+            status: requiresApproval ? 'pending' : 'completed'
+        }
+    }, 201);
+});
 
-        return c.json({
-            success: true,
-            data: result,
-            meta: { approved: true }
-        });
-    } catch (error) {
-        throw error;
+/**
+ * PATCH /accounts/withdrawals/:withdrawalId/approve
+ * Approve a pending withdrawal
+ */
+accountRoutes.patch('/withdrawals/:withdrawalId/approve', enforcePermission('withdrawals', 'approve'), async (c) => {
+    const { withdrawalId } = c.req.param();
+    const { schema_name, db } = getTenantContext(c);
+
+    const accountRepo = new AccountRepository(schema_name);
+
+    const withdrawal = await accountRepo.findWithdrawalById(withdrawalId);
+    if (!withdrawal) {
+        throw new NotFoundError('Withdrawal', withdrawalId);
     }
+
+    if (withdrawal.status !== 'pending') {
+        return c.json({
+            success: false,
+            error: { code: 'INVALID_STATUS', message: 'Withdrawal is not pending' }
+        }, 400);
+    }
+
+    // Approve withdrawal atomically: check balance BEFORE setting status
+    const result = await db.transaction().execute(async (trx) => {
+        // Lock and read account balance inside transaction
+        const account = await trx
+            .selectFrom('savings_accounts')
+            .selectAll()
+            .where('id', '=', withdrawal.savings_account_id)
+            .executeTakeFirstOrThrow();
+
+        const currentBalance = new Decimal(account.principal_balance?.toString() ?? '0');
+        const withdrawalAmount = new Decimal(withdrawal.amount?.toString() ?? '0');
+
+        if (withdrawalAmount.gt(currentBalance)) {
+            throw new ValidationError(
+                `Insufficient balance. Available: ${currentBalance.toFixed(2)}, Withdrawal: ${withdrawalAmount.toFixed(2)}`
+            );
+        }
+
+        // Deduct balance and approve atomically
+        const newBalance = currentBalance.minus(withdrawalAmount);
+        await trx
+            .updateTable('savings_accounts')
+            .set({
+                principal_balance: newBalance.toString() as any,
+                updated_at: new Date() as any,
+            } as any)
+            .where('id', '=', withdrawal.savings_account_id)
+            .execute();
+
+        const updated = await trx
+            .updateTable('withdrawals')
+            .set({
+                status: 'approved' as any,
+                approved_by: user.id,
+                approved_at: new Date() as any,
+            } as any)
+            .where('id', '=', withdrawalId)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+
+        return updated;
+    });
+
+    return c.json({
+        success: true,
+        data: result,
+        meta: { approved: true }
+    });
 });
 
 const rejectWithdrawalSchema = z.object({
@@ -646,44 +583,35 @@ const rejectWithdrawalSchema = z.object({
  * PATCH /accounts/withdrawals/:withdrawalId/reject
  * Reject a pending withdrawal
  */
-accountRoutes.patch('/withdrawals/:withdrawalId/reject', validate(rejectWithdrawalSchema), async (c) => {
-    try {
-        const { withdrawalId } = c.req.param();
-        const data = getValidatedData<z.infer<typeof rejectWithdrawalSchema>>(c);
-        const { schema_name } = c.get('tenant')!;
-        const user = c.get('user');
+accountRoutes.patch('/withdrawals/:withdrawalId/reject', enforcePermission('withdrawals', 'approve'), validate(rejectWithdrawalSchema), async (c) => {
+    const { withdrawalId } = c.req.param();
+    const data = getValidatedData<z.infer<typeof rejectWithdrawalSchema>>(c);
+    const { schema_name, db } = getTenantContext(c);
 
-        if (!user || !hasPermission(user.role || '', 'withdrawals', 'approve')) {
-            throw new UnauthorizedError('Insufficient permissions to reject withdrawals');
-        }
+    const accountRepo = new AccountRepository(schema_name);
 
-        const accountRepo = new AccountRepository(schema_name);
-
-        const withdrawal = await accountRepo.findWithdrawalById(withdrawalId);
-        if (!withdrawal) {
-            throw new NotFoundError('Withdrawal', withdrawalId);
-        }
-
-        if (withdrawal.status !== 'pending') {
-            return c.json({
-                success: false,
-                error: { code: 'INVALID_STATUS', message: 'Only pending withdrawals can be rejected' }
-            }, 400);
-        }
-
-        const updated = await accountRepo.updateWithdrawal(withdrawalId, {
-            status: 'rejected',
-            rejection_reason: data.rejection_reason,
-        } as any);
-
-        return c.json({
-            success: true,
-            data: updated,
-            meta: { rejected: true }
-        });
-    } catch (error) {
-        throw error;
+    const withdrawal = await accountRepo.findWithdrawalById(withdrawalId);
+    if (!withdrawal) {
+        throw new NotFoundError('Withdrawal', withdrawalId);
     }
+
+    if (withdrawal.status !== 'pending') {
+        return c.json({
+            success: false,
+            error: { code: 'INVALID_STATUS', message: 'Only pending withdrawals can be rejected' }
+        }, 400);
+    }
+
+    const updated = await accountRepo.updateWithdrawal(withdrawalId, {
+        status: 'rejected',
+        rejection_reason: data.rejection_reason,
+    } as any);
+
+    return c.json({
+        success: true,
+        data: updated,
+        meta: { rejected: true }
+    });
 });
 
 // =============================================================================
@@ -695,113 +623,108 @@ accountRoutes.patch('/withdrawals/:withdrawalId/reject', validate(rejectWithdraw
  * Transfer funds between accounts
  */
 accountRoutes.post('/transfer', rateLimit({ maxRequests: 20, windowSeconds: 60, keyPrefix: 'rl:transfer' }), validate(transferSchema), async (c) => {
-    try {
-        const data = getValidatedData<z.infer<typeof transferSchema>>(c);
-        const { schema_name } = c.get('tenant')!;
-        const currentUser = c.get('user');
-        const accountRepo = new AccountRepository(schema_name);
-        const savingsService = new SavingsService();
+    const data = getValidatedData<z.infer<typeof transferSchema>>(c);
+    const { schema_name, db } = getTenantContext(c);
+    const currentUser = c.get('user');
+    const accountRepo = new AccountRepository(schema_name);
+    const savingsService = new SavingsService();
 
-        // Verify both accounts exist
-        const fromAccount = await accountRepo.findById(data.from_account_id);
-        const toAccount = await accountRepo.findById(data.to_account_id);
+    // Verify both accounts exist
+    const fromAccount = await accountRepo.findById(data.from_account_id);
+    const toAccount = await accountRepo.findById(data.to_account_id);
 
-        if (!fromAccount || !toAccount) {
-            throw new NotFoundError('Account', 'One or both accounts not found');
-        }
-
-        // Prevent self-transfers (could create money due to non-atomic read/write)
-        if (data.from_account_id === data.to_account_id) {
-            return c.json({
-                success: false,
-                error: { code: 'INVALID_TRANSFER', message: 'Cannot transfer to the same account' }
-            }, 400);
-        }
-
-        // Authorization
-        if (currentUser?.role === 'member' && fromAccount.member_id !== currentUser.id) {
-            throw new UnauthorizedError('Cannot transfer from other members\' accounts');
-        }
-
-        // Validate sufficient balance using Decimal
-        const fromBalance = new Decimal(fromAccount.principal_balance?.toString() ?? '0');
-        const transferAmount = new Decimal(data.amount);
-        if (fromBalance.lt(transferAmount)) {
-            return c.json({
-                success: false,
-                error: { code: 'INSUFFICIENT_FUNDS', message: 'Insufficient balance' }
-            }, 400);
-        }
-
-        const transferNumber = savingsService.generateTransactionReference();
-
-        // Execute transfer atomically in a database transaction
-        const db = getTenantDb(schema_name);
-        const transfer = await db.transaction().execute(async (trx) => {
-            // Re-read balances inside transaction for consistency
-            const freshFrom = await trx
-                .selectFrom('savings_accounts')
-                .select(['id', 'principal_balance'])
-                .where('id', '=', data.from_account_id)
-                .executeTakeFirstOrThrow();
-
-            const freshTo = await trx
-                .selectFrom('savings_accounts')
-                .select(['id', 'principal_balance'])
-                .where('id', '=', data.to_account_id)
-                .executeTakeFirstOrThrow();
-
-            const freshFromBalance = new Decimal(freshFrom.principal_balance?.toString() ?? '0');
-            const freshToBalance = new Decimal(freshTo.principal_balance?.toString() ?? '0');
-
-            if (freshFromBalance.lt(transferAmount)) {
-                throw new ValidationError('Insufficient balance');
-            }
-
-            // Create transfer record
-            const txfr = await (trx as any)
-                .insertInto('transfers')
-                .values({
-                    from_account_id: data.from_account_id,
-                    to_account_id: data.to_account_id,
-                    transfer_number: transferNumber,
-                    amount: String(data.amount),
-                    transfer_date: new Date(),
-                    status: 'posted',
-                    description: data.description || null,
-                    initiated_by: currentUser?.id || null,
-                } as any)
-                .returningAll()
-                .executeTakeFirstOrThrow();
-
-            // Update both account balances atomically
-            await trx
-                .updateTable('savings_accounts')
-                .set({
-                    principal_balance: freshFromBalance.minus(transferAmount).toString() as any,
-                } as any)
-                .where('id', '=', data.from_account_id)
-                .execute();
-
-            await trx
-                .updateTable('savings_accounts')
-                .set({
-                    principal_balance: freshToBalance.plus(transferAmount).toString() as any,
-                } as any)
-                .where('id', '=', data.to_account_id)
-                .execute();
-
-            return txfr;
-        });
-
-        return c.json({
-            success: true,
-            data: transfer,
-            meta: { transferred: true, reference: transferNumber }
-        }, 201);
-    } catch (error) {
-        throw error;
+    if (!fromAccount || !toAccount) {
+        throw new NotFoundError('Account', 'One or both accounts not found');
     }
+
+    // Prevent self-transfers (could create money due to non-atomic read/write)
+    if (data.from_account_id === data.to_account_id) {
+        return c.json({
+            success: false,
+            error: { code: 'INVALID_TRANSFER', message: 'Cannot transfer to the same account' }
+        }, 400);
+    }
+
+    // Authorization
+    if (currentUser?.role === 'member' && fromAccount.member_id !== currentUser.id) {
+        throw new UnauthorizedError('Cannot transfer from other members\' accounts');
+    }
+
+    // Validate sufficient balance using Decimal
+    const fromBalance = new Decimal(fromAccount.principal_balance?.toString() ?? '0');
+    const transferAmount = new Decimal(data.amount);
+    if (fromBalance.lt(transferAmount)) {
+        return c.json({
+            success: false,
+            error: { code: 'INSUFFICIENT_FUNDS', message: 'Insufficient balance' }
+        }, 400);
+    }
+
+    const transferNumber = savingsService.generateTransactionReference();
+
+    // Execute transfer atomically in a database transaction
+    const transfer = await db.transaction().execute(async (trx) => {
+        // Re-read balances inside transaction for consistency
+        const freshFrom = await trx
+            .selectFrom('savings_accounts')
+            .select(['id', 'principal_balance'])
+            .where('id', '=', data.from_account_id)
+            .executeTakeFirstOrThrow();
+
+        const freshTo = await trx
+            .selectFrom('savings_accounts')
+            .select(['id', 'principal_balance'])
+            .where('id', '=', data.to_account_id)
+            .executeTakeFirstOrThrow();
+
+        const freshFromBalance = new Decimal(freshFrom.principal_balance?.toString() ?? '0');
+        const freshToBalance = new Decimal(freshTo.principal_balance?.toString() ?? '0');
+
+        if (freshFromBalance.lt(transferAmount)) {
+            throw new ValidationError('Insufficient balance');
+        }
+
+        // Create transfer record
+        const txfr = await (trx as any)
+            .insertInto('transfers')
+            .values({
+                from_account_id: data.from_account_id,
+                to_account_id: data.to_account_id,
+                transfer_number: transferNumber,
+                amount: String(data.amount),
+                transfer_date: new Date(),
+                status: 'posted',
+                description: data.description || null,
+                initiated_by: currentUser?.id || null,
+            } as any)
+            .returningAll()
+            .executeTakeFirstOrThrow();
+
+        // Update both account balances atomically
+        await trx
+            .updateTable('savings_accounts')
+            .set({
+                principal_balance: freshFromBalance.minus(transferAmount).toString() as any,
+            } as any)
+            .where('id', '=', data.from_account_id)
+            .execute();
+
+        await trx
+            .updateTable('savings_accounts')
+            .set({
+                principal_balance: freshToBalance.plus(transferAmount).toString() as any,
+            } as any)
+            .where('id', '=', data.to_account_id)
+            .execute();
+
+        return txfr;
+    });
+
+    return c.json({
+        success: true,
+        data: transfer,
+        meta: { transferred: true, reference: transferNumber }
+    }, 201);
 });
 
 // =============================================================================
@@ -813,74 +736,69 @@ accountRoutes.post('/transfer', rateLimit({ maxRequests: 20, windowSeconds: 60, 
  * Close an account
  */
 accountRoutes.patch('/:accountId/close', validate(closeAccountSchema), async (c) => {
-    try {
-        const { accountId } = c.req.param();
-        const data = getValidatedData<z.infer<typeof closeAccountSchema>>(c);
-        const { schema_name } = c.get('tenant')!;
-        const currentUser = c.get('user');
-        const accountRepo = new AccountRepository(schema_name);
+    const { accountId } = c.req.param();
+    const data = getValidatedData<z.infer<typeof closeAccountSchema>>(c);
+    const { schema_name, db } = getTenantContext(c);
+    const currentUser = c.get('user');
+    const accountRepo = new AccountRepository(schema_name);
 
-        const account = await accountRepo.findById(accountId);
-        if (!account) {
-            throw new NotFoundError('Account', accountId);
-        }
-
-        // Authorization
-        if (currentUser?.role === 'member' && account.member_id !== currentUser.id) {
-            throw new UnauthorizedError('Cannot close other members\' accounts');
-        }
-
-        // Validate account can be closed
-        const balance = new Decimal(account.principal_balance?.toString() ?? '0');
-        if (!balance.isZero()) {
-            throw new ValidationError(
-                `Cannot close account with non-zero balance (${balance.toFixed(2)}). Withdraw or transfer funds first.`
-            );
-        }
-
-        // Check for active liens
-        const db = getTenantDb(schema_name);
-        const activeLiens = await db
-            .selectFrom('account_liens')
-            .select(db.fn.countAll().as('count'))
-            .where('account_id', '=', accountId)
-            .where('status', '=', 'active')
-            .executeTakeFirst();
-
-        if (activeLiens && Number(activeLiens.count) > 0) {
-            throw new ValidationError(
-                `Cannot close account with ${activeLiens.count} active lien(s). Release all liens first.`
-            );
-        }
-
-        // Check for active standing instructions
-        const activeSIs = await db
-            .selectFrom('standing_instructions')
-            .select(db.fn.countAll().as('count'))
-            .where('source_account_id', '=', accountId)
-            .where('status', '=', 'active')
-            .where('deleted_at', 'is', null)
-            .executeTakeFirst();
-
-        if (activeSIs && Number(activeSIs.count) > 0) {
-            throw new ValidationError(
-                `Cannot close account with ${activeSIs.count} active standing instruction(s). Cancel them first.`
-            );
-        }
-
-        const closedAccount = await accountRepo.update(accountId, {
-            status: 'closed',
-            closed_date: new Date(),
-        } as any);
-
-        return c.json({
-            success: true,
-            data: closedAccount,
-            meta: { closed: true }
-        });
-    } catch (error) {
-        throw error;
+    const account = await accountRepo.findById(accountId);
+    if (!account) {
+        throw new NotFoundError('Account', accountId);
     }
+
+    // Authorization
+    if (currentUser?.role === 'member' && account.member_id !== currentUser.id) {
+        throw new UnauthorizedError('Cannot close other members\' accounts');
+    }
+
+    // Validate account can be closed
+    const balance = new Decimal(account.principal_balance?.toString() ?? '0');
+    if (!balance.isZero()) {
+        throw new ValidationError(
+            `Cannot close account with non-zero balance (${balance.toFixed(2)}). Withdraw or transfer funds first.`
+        );
+    }
+
+    // Check for active liens
+    const activeLiens = await db
+        .selectFrom('account_liens')
+        .select(db.fn.countAll().as('count'))
+        .where('account_id', '=', accountId)
+        .where('status', '=', 'active')
+        .executeTakeFirst();
+
+    if (activeLiens && Number(activeLiens.count) > 0) {
+        throw new ValidationError(
+            `Cannot close account with ${activeLiens.count} active lien(s). Release all liens first.`
+        );
+    }
+
+    // Check for active standing instructions
+    const activeSIs = await db
+        .selectFrom('standing_instructions')
+        .select(db.fn.countAll().as('count'))
+        .where('source_account_id', '=', accountId)
+        .where('status', '=', 'active')
+        .where('deleted_at', 'is', null)
+        .executeTakeFirst();
+
+    if (activeSIs && Number(activeSIs.count) > 0) {
+        throw new ValidationError(
+            `Cannot close account with ${activeSIs.count} active standing instruction(s). Cancel them first.`
+        );
+    }
+
+    const closedAccount = await accountRepo.update(accountId, {
+        status: 'closed',
+        closed_date: new Date(),
+    } as any);
+
+    return c.json({
+        success: true,
+        data: closedAccount,
+        meta: { closed: true }
+    });
 });
 
 /**
@@ -888,32 +806,28 @@ accountRoutes.patch('/:accountId/close', validate(closeAccountSchema), async (c)
  * Get deposit history for an account
  */
 accountRoutes.get('/:accountId/deposits', async (c) => {
-    try {
-        const { accountId } = c.req.param();
-        const { schema_name } = c.get('tenant')!;
-        const currentUser = c.get('user');
-        const accountRepo = new AccountRepository(schema_name);
+    const { accountId } = c.req.param();
+    const { schema_name, db } = getTenantContext(c);
+    const currentUser = c.get('user');
+    const accountRepo = new AccountRepository(schema_name);
 
-        // Verify account exists and user has access
-        const account = await accountRepo.findById(accountId);
-        if (!account) {
-            throw new NotFoundError('Account', accountId);
-        }
-
-        if (currentUser?.role === 'member' && account.member_id !== currentUser.id) {
-            throw new UnauthorizedError('Cannot access other members\' deposits');
-        }
-
-        const deposits = await accountRepo.findDepositsByAccountId(accountId);
-
-        return c.json({
-            success: true,
-            data: deposits.slice(0, 200),
-            meta: { count: Math.min(deposits.length, 200), total: deposits.length }
-        });
-    } catch (error) {
-        throw error;
+    // Verify account exists and user has access
+    const account = await accountRepo.findById(accountId);
+    if (!account) {
+        throw new NotFoundError('Account', accountId);
     }
+
+    if (currentUser?.role === 'member' && account.member_id !== currentUser.id) {
+        throw new UnauthorizedError('Cannot access other members\' deposits');
+    }
+
+    const deposits = await accountRepo.findDepositsByAccountId(accountId);
+
+    return c.json({
+        success: true,
+        data: deposits.slice(0, 200),
+        meta: { count: Math.min(deposits.length, 200), total: deposits.length }
+    });
 });
 
 /**
@@ -921,31 +835,27 @@ accountRoutes.get('/:accountId/deposits', async (c) => {
  * Get transfer history for an account
  */
 accountRoutes.get('/:accountId/transfers', async (c) => {
-    try {
-        const { accountId } = c.req.param();
-        const { schema_name } = c.get('tenant')!;
-        const currentUser = c.get('user');
-        const accountRepo = new AccountRepository(schema_name);
+    const { accountId } = c.req.param();
+    const { schema_name, db } = getTenantContext(c);
+    const currentUser = c.get('user');
+    const accountRepo = new AccountRepository(schema_name);
 
-        const account = await accountRepo.findById(accountId);
-        if (!account) {
-            throw new NotFoundError('Account', accountId);
-        }
-
-        if (currentUser?.role === 'member' && account.member_id !== currentUser.id) {
-            throw new UnauthorizedError('Cannot access other members\' transfers');
-        }
-
-        const transfers = await accountRepo.findTransfersByAccountId(accountId);
-
-        return c.json({
-            success: true,
-            data: transfers,
-            meta: { count: transfers.length }
-        });
-    } catch (error) {
-        throw error;
+    const account = await accountRepo.findById(accountId);
+    if (!account) {
+        throw new NotFoundError('Account', accountId);
     }
+
+    if (currentUser?.role === 'member' && account.member_id !== currentUser.id) {
+        throw new UnauthorizedError('Cannot access other members\' transfers');
+    }
+
+    const transfers = await accountRepo.findTransfersByAccountId(accountId);
+
+    return c.json({
+        success: true,
+        data: transfers,
+        meta: { count: transfers.length }
+    });
 });
 
 // =============================================================================
@@ -956,104 +866,95 @@ accountRoutes.get('/:accountId/transfers', async (c) => {
  * POST /accounts/batch-deposit
  * Process multiple deposits in a single request (payroll, bulk)
  */
-accountRoutes.post('/batch-deposit', rateLimit({ maxRequests: 5, windowSeconds: 60, keyPrefix: 'rl:batch-deposit' }), validate(batchDepositSchema), async (c) => {
-    try {
-        const data = getValidatedData<z.infer<typeof batchDepositSchema>>(c);
-        const { schema_name } = c.get('tenant')!;
-        const currentUser = c.get('user');
-        const accountRepo = new AccountRepository(schema_name);
-        const savingsService = new SavingsService();
+accountRoutes.post('/batch-deposit', enforcePermission('savings', 'create'), rateLimit({ maxRequests: 5, windowSeconds: 60, keyPrefix: 'rl:batch-deposit' }), validate(batchDepositSchema), async (c) => {
+    const data = getValidatedData<z.infer<typeof batchDepositSchema>>(c);
+    const { schema_name, db } = getTenantContext(c);
+    const currentUser = c.get('user');
+    const accountRepo = new AccountRepository(schema_name);
+    const savingsService = new SavingsService();
 
-        if (!currentUser || !hasPermission(currentUser.role || '', 'savings', 'create')) {
-            throw new UnauthorizedError('Insufficient permissions for batch deposits');
+    const results: Array<{ depositNumber: string; accountId: string; amount: number; status: string }> = [];
+    const errors: Array<{ index: number; accountId: string; error: string }> = [];
+
+    // Process batch deposits atomically using Kysely transaction
+
+    await db.transaction().execute(async (trx) => {
+        for (let i = 0; i < data.deposits.length; i++) {
+            const item = data.deposits[i];
+            try {
+                // Read account inside transaction for consistency
+                const account = await trx
+                    .selectFrom('savings_accounts')
+                    .selectAll()
+                    .where('id', '=', item.savings_account_id)
+                    .where('deleted_at', 'is', null)
+                    .executeTakeFirst();
+
+                if (!account) {
+                    errors.push({ index: i, accountId: item.savings_account_id, error: 'Account not found' });
+                    continue;
+                }
+
+                const depositNumber = savingsService.generateTransactionReference();
+                await trx
+                    .insertInto('deposits')
+                    .values({
+                        savings_account_id: item.savings_account_id,
+                        member_id: item.member_id,
+                        deposit_number: depositNumber,
+                        amount: String(item.amount) as any,
+                        deposit_date: new Date() as any,
+                        payment_method: item.payment_method as any,
+                        payment_reference: item.payment_reference || null,
+                        status: 'posted' as any,
+                        description: item.description || 'Batch deposit',
+                        recorded_by: currentUser.id,
+                    } as any)
+                    .execute();
+
+                const currentBalance = new Decimal(account.principal_balance?.toString() ?? '0');
+                const depositAmount = new Decimal(item.amount);
+                const newBalance = currentBalance.plus(depositAmount);
+
+                await trx
+                    .updateTable('savings_accounts')
+                    .set({
+                        principal_balance: newBalance.toString() as any,
+                        updated_at: new Date() as any,
+                    } as any)
+                    .where('id', '=', item.savings_account_id)
+                    .execute();
+
+                results.push({
+                    depositNumber,
+                    accountId: item.savings_account_id,
+                    amount: item.amount,
+                    status: 'posted',
+                });
+            } catch (error) {
+                const errMsg = error instanceof Error ? error.message : 'Unknown error';
+                errors.push({ index: i, accountId: item.savings_account_id, error: errMsg });
+            }
         }
 
-        const results: Array<{ depositNumber: string; accountId: string; amount: number; status: string }> = [];
-        const errors: Array<{ index: number; accountId: string; error: string }> = [];
+        // If no deposits succeeded, throw to trigger rollback
+        if (results.length === 0 && errors.length > 0) {
+            throw new ValidationError('All deposits in batch failed');
+        }
+    });
 
-        // Process batch deposits atomically using Kysely transaction
-        const db = getTenantDb(schema_name);
+    const totalDeposited = results.reduce((sum, r) => sum + r.amount, 0);
 
-        await db.transaction().execute(async (trx) => {
-            for (let i = 0; i < data.deposits.length; i++) {
-                const item = data.deposits[i];
-                try {
-                    // Read account inside transaction for consistency
-                    const account = await trx
-                        .selectFrom('savings_accounts')
-                        .selectAll()
-                        .where('id', '=', item.savings_account_id)
-                        .where('deleted_at', 'is', null)
-                        .executeTakeFirst();
-
-                    if (!account) {
-                        errors.push({ index: i, accountId: item.savings_account_id, error: 'Account not found' });
-                        continue;
-                    }
-
-                    const depositNumber = savingsService.generateTransactionReference();
-                    await trx
-                        .insertInto('deposits')
-                        .values({
-                            savings_account_id: item.savings_account_id,
-                            member_id: item.member_id,
-                            deposit_number: depositNumber,
-                            amount: String(item.amount) as any,
-                            deposit_date: new Date() as any,
-                            payment_method: item.payment_method as any,
-                            payment_reference: item.payment_reference || null,
-                            status: 'posted' as any,
-                            description: item.description || 'Batch deposit',
-                            recorded_by: currentUser.id,
-                        } as any)
-                        .execute();
-
-                    const currentBalance = new Decimal(account.principal_balance?.toString() ?? '0');
-                    const depositAmount = new Decimal(item.amount);
-                    const newBalance = currentBalance.plus(depositAmount);
-
-                    await trx
-                        .updateTable('savings_accounts')
-                        .set({
-                            principal_balance: newBalance.toString() as any,
-                            updated_at: new Date() as any,
-                        } as any)
-                        .where('id', '=', item.savings_account_id)
-                        .execute();
-
-                    results.push({
-                        depositNumber,
-                        accountId: item.savings_account_id,
-                        amount: item.amount,
-                        status: 'posted',
-                    });
-                } catch (error) {
-                    const errMsg = error instanceof Error ? error.message : 'Unknown error';
-                    errors.push({ index: i, accountId: item.savings_account_id, error: errMsg });
-                }
-            }
-
-            // If no deposits succeeded, throw to trigger rollback
-            if (results.length === 0 && errors.length > 0) {
-                throw new ValidationError('All deposits in batch failed');
-            }
-        });
-
-        const totalDeposited = results.reduce((sum, r) => sum + r.amount, 0);
-
-        return c.json({
-            success: true,
-            data: { results, errors },
-            meta: {
-                total: data.deposits.length,
-                successful: results.length,
-                failed: errors.length,
-                totalDeposited,
-            },
-        }, 201);
-    } catch (error) {
-        throw error;
-    }
+    return c.json({
+        success: true,
+        data: { results, errors },
+        meta: {
+            total: data.deposits.length,
+            successful: results.length,
+            failed: errors.length,
+            totalDeposited,
+        },
+    }, 201);
 });
 
 // =============================================================================
@@ -1071,77 +972,67 @@ const interestPostRateLimit = rateLimit({
     message: 'Too many interest posting requests. Please try again later.',
 });
 
-accountRoutes.post('/:accountId/post-interest', interestPostRateLimit, async (c) => {
-    try {
-        const { accountId } = c.req.param();
-        const user = c.get('user');
-        const db = c.get('db')!;
+accountRoutes.post('/:accountId/post-interest', enforcePermission('savings', 'update'), interestPostRateLimit, async (c) => {
+    const { accountId } = c.req.param();
+    const { schema_name, db } = getTenantContext(c);
+    const user = c.get('user')!;
+    const accountRepo = new AccountRepository(schema_name);
 
-        if (!user || !hasPermission(user.role || '', 'savings', 'update')) {
-            throw new UnauthorizedError('Insufficient permissions to post interest');
-        }
-
-        const { schema_name } = c.get('tenant')!;
-        const accountRepo = new AccountRepository(schema_name);
-
-        const account = await accountRepo.findById(accountId);
-        if (!account) {
-            throw new NotFoundError('Account', accountId);
-        }
-
-        const accruedInterest = new Decimal(account.interest_accrued?.toString() ?? '0');
-
-        if (accruedInterest.lte(0)) {
-            return c.json({
-                success: false,
-                error: { code: 'NO_INTEREST', message: 'No accrued interest to post' },
-            }, 400);
-        }
-
-        // Post interest: add to balance, reset accrued, track paid
-        const currentBalance = new Decimal(account.principal_balance?.toString() ?? '0');
-        const currentPaid = new Decimal(account.interest_paid?.toString() ?? '0');
-
-        const newBalance = currentBalance.plus(accruedInterest);
-        const newPaid = currentPaid.plus(accruedInterest);
-
-        await accountRepo.update(accountId, {
-            principal_balance: newBalance.toString(),
-            interest_accrued: '0',
-            interest_paid: newPaid.toString(),
-        } as any);
-
-        // Record interest schedule entry
-        const now = new Date();
-        await db
-            .insertInto('interest_schedules')
-            .values({
-                savings_account_id: accountId,
-                period_start: new Date(now.getFullYear(), now.getMonth(), 1) as any,
-                period_end: now as any,
-                opening_balance: currentBalance.toString() as any,
-                closing_balance: newBalance.toString() as any,
-                interest_rate: '0' as any,
-                interest_accrued: accruedInterest.toString() as any,
-                is_posted: true as any,
-                posted_date: now as any,
-                posted_by: user.id,
-            } as any)
-            .execute();
-
-        return c.json({
-            success: true,
-            data: {
-                accountId,
-                interestPosted: accruedInterest.toFixed(2),
-                newBalance: newBalance.toFixed(2),
-                totalInterestPaid: newPaid.toFixed(2),
-            },
-            meta: { posted: true },
-        });
-    } catch (error) {
-        throw error;
+    const account = await accountRepo.findById(accountId);
+    if (!account) {
+        throw new NotFoundError('Account', accountId);
     }
+
+    const accruedInterest = new Decimal(account.interest_accrued?.toString() ?? '0');
+
+    if (accruedInterest.lte(0)) {
+        return c.json({
+            success: false,
+            error: { code: 'NO_INTEREST', message: 'No accrued interest to post' },
+        }, 400);
+    }
+
+    // Post interest: add to balance, reset accrued, track paid
+    const currentBalance = new Decimal(account.principal_balance?.toString() ?? '0');
+    const currentPaid = new Decimal(account.interest_paid?.toString() ?? '0');
+
+    const newBalance = currentBalance.plus(accruedInterest);
+    const newPaid = currentPaid.plus(accruedInterest);
+
+    await accountRepo.update(accountId, {
+        principal_balance: newBalance.toString(),
+        interest_accrued: '0',
+        interest_paid: newPaid.toString(),
+    } as any);
+
+    // Record interest schedule entry
+    const now = new Date();
+    await db
+        .insertInto('interest_schedules')
+        .values({
+            savings_account_id: accountId,
+            period_start: new Date(now.getFullYear(), now.getMonth(), 1) as any,
+            period_end: now as any,
+            opening_balance: currentBalance.toString() as any,
+            closing_balance: newBalance.toString() as any,
+            interest_rate: '0' as any,
+            interest_accrued: accruedInterest.toString() as any,
+            is_posted: true as any,
+            posted_date: now as any,
+            posted_by: user.id,
+        } as any)
+        .execute();
+
+    return c.json({
+        success: true,
+        data: {
+            accountId,
+            interestPosted: accruedInterest.toFixed(2),
+            newBalance: newBalance.toFixed(2),
+            totalInterestPaid: newPaid.toFixed(2),
+        },
+        meta: { posted: true },
+    });
 });
 
 // =============================================================================
@@ -1153,203 +1044,198 @@ accountRoutes.post('/:accountId/post-interest', interestPostRateLimit, async (c)
  * Generate account statement with all transactions
  */
 accountRoutes.get('/:accountId/statement', async (c) => {
-    try {
-        const { accountId } = c.req.param();
-        const { schema_name } = c.get('tenant')!;
-        const currentUser = c.get('user');
-        const accountRepo = new AccountRepository(schema_name);
-        const db = c.get('db')!;
+    const { accountId } = c.req.param();
+    const { schema_name, db } = getTenantContext(c);
+    const currentUser = c.get('user');
+    const accountRepo = new AccountRepository(schema_name);
 
-        const account = await accountRepo.findById(accountId);
-        if (!account) {
-            throw new NotFoundError('Account', accountId);
-        }
-
-        if (currentUser?.role === 'member' && account.member_id !== currentUser.id) {
-            throw new UnauthorizedError('Cannot access other members\' statements');
-        }
-
-        const startDate = c.req.query('start_date');
-        const endDate = c.req.query('end_date');
-
-        // Validate date parameters
-        if (startDate && isNaN(Date.parse(startDate))) {
-            throw new ValidationError('Invalid start_date format. Use ISO 8601 (e.g., 2025-01-01)');
-        }
-        if (endDate && isNaN(Date.parse(endDate))) {
-            throw new ValidationError('Invalid end_date format. Use ISO 8601 (e.g., 2025-12-31)');
-        }
-
-        // Build date range query
-        const from = startDate ? new Date(startDate) : new Date(new Date().getFullYear(), 0, 1);
-        const to = endDate ? new Date(endDate) : new Date();
-
-        if (from > to) {
-            throw new ValidationError('start_date must be before end_date');
-        }
-
-        // Get deposits in range
-        const deposits = await db
-            .selectFrom('deposits')
-            .selectAll()
-            .where('savings_account_id', '=', accountId)
-            .where('deleted_at', 'is', null)
-            .where('deposit_date', '>=', from as any)
-            .where('deposit_date', '<=', to as any)
-            .where('status', '=', 'posted')
-            .orderBy('deposit_date', 'asc')
-            .execute();
-
-        // Get withdrawals in range
-        const withdrawals = await db
-            .selectFrom('withdrawals')
-            .selectAll()
-            .where('savings_account_id', '=', accountId)
-            .where('deleted_at', 'is', null)
-            .where('withdrawal_date', '>=', from as any)
-            .where('withdrawal_date', '<=', to as any)
-            .where('status', 'in', ['approved', 'completed'])
-            .orderBy('withdrawal_date', 'asc')
-            .execute();
-
-        // Get transfers in range
-        const transfers = await db
-            .selectFrom('internal_transfers')
-            .selectAll()
-            .where('deleted_at', 'is', null)
-            .where('transfer_date', '>=', from as any)
-            .where('transfer_date', '<=', to as any)
-            .where('status', '=', 'posted')
-            .where((eb) =>
-                eb.or([
-                    eb('from_account_id', '=', accountId),
-                    eb('to_account_id', '=', accountId),
-                ])
-            )
-            .orderBy('transfer_date', 'asc')
-            .execute();
-
-        // Get interest schedules
-        const interestEntries = await db
-            .selectFrom('interest_schedules')
-            .selectAll()
-            .where('savings_account_id', '=', accountId)
-            .where('period_end', '>=', from as any)
-            .where('period_end', '<=', to as any)
-            .where('is_posted', '=', true)
-            .orderBy('period_end', 'asc')
-            .execute();
-
-        // Build statement entries sorted by date
-        type StatementEntry = {
-            date: Date;
-            type: string;
-            reference: string;
-            description: string;
-            debit: string;
-            credit: string;
-        };
-
-        const entries: StatementEntry[] = [];
-
-        for (const d of deposits) {
-            entries.push({
-                date: new Date(d.deposit_date as any),
-                type: 'deposit',
-                reference: d.deposit_number,
-                description: d.description || `Deposit via ${d.payment_method}`,
-                debit: '',
-                credit: d.amount?.toString() ?? '0',
-            });
-        }
-
-        for (const w of withdrawals) {
-            entries.push({
-                date: new Date(w.withdrawal_date as any),
-                type: 'withdrawal',
-                reference: w.withdrawal_number,
-                description: w.description || `Withdrawal via ${w.payout_method}`,
-                debit: w.amount?.toString() ?? '0',
-                credit: '',
-            });
-        }
-
-        for (const t of transfers) {
-            const isOutgoing = t.from_account_id === accountId;
-            entries.push({
-                date: new Date(t.transfer_date as any),
-                type: isOutgoing ? 'transfer_out' : 'transfer_in',
-                reference: t.transfer_number,
-                description: t.description || (isOutgoing ? 'Transfer out' : 'Transfer in'),
-                debit: isOutgoing ? (t.amount?.toString() ?? '0') : '',
-                credit: isOutgoing ? '' : (t.amount?.toString() ?? '0'),
-            });
-        }
-
-        for (const ie of interestEntries) {
-            entries.push({
-                date: new Date(ie.period_end as any),
-                type: 'interest',
-                reference: `INT-${new Date(ie.period_end as any).toISOString().slice(0, 7)}`,
-                description: 'Interest posting',
-                debit: '',
-                credit: ie.interest_accrued?.toString() ?? '0',
-            });
-        }
-
-        // Sort by date
-        entries.sort((a, b) => a.date.getTime() - b.date.getTime());
-
-        // Calculate running balance
-        let runningBalance = new Decimal(0);
-        const statementLines = entries.map(e => {
-            const credit = e.credit ? new Decimal(e.credit) : new Decimal(0);
-            const debit = e.debit ? new Decimal(e.debit) : new Decimal(0);
-            runningBalance = runningBalance.plus(credit).minus(debit);
-            return {
-                ...e,
-                date: e.date.toISOString().split('T')[0],
-                balance: runningBalance.toFixed(2),
-            };
-        });
-
-        // Get member info
-        const member = await db
-            .selectFrom('members')
-            .select(['first_name', 'last_name', 'member_number'])
-            .where('id', '=', account.member_id)
-            .executeTakeFirst();
-
-        return c.json({
-            success: true,
-            data: {
-                account: {
-                    id: account.id,
-                    accountNumber: account.account_number,
-                    status: account.status,
-                    currentBalance: account.principal_balance?.toString(),
-                },
-                member: member ? {
-                    name: `${member.first_name} ${member.last_name}`,
-                    memberNumber: member.member_number,
-                } : null,
-                period: {
-                    from: from.toISOString().split('T')[0],
-                    to: to.toISOString().split('T')[0],
-                },
-                entries: statementLines,
-                summary: {
-                    totalDeposits: deposits.reduce((s, d) => s + Number(d.amount ?? 0), 0).toFixed(2),
-                    totalWithdrawals: withdrawals.reduce((s, w) => s + Number(w.amount ?? 0), 0).toFixed(2),
-                    totalInterest: interestEntries.reduce((s, ie) => s + Number(ie.interest_accrued ?? 0), 0).toFixed(2),
-                    closingBalance: account.principal_balance?.toString() ?? '0',
-                    entryCount: entries.length,
-                },
-            },
-        });
-    } catch (error) {
-        throw error;
+    const account = await accountRepo.findById(accountId);
+    if (!account) {
+        throw new NotFoundError('Account', accountId);
     }
+
+    if (currentUser?.role === 'member' && account.member_id !== currentUser.id) {
+        throw new UnauthorizedError('Cannot access other members\' statements');
+    }
+
+    const startDate = c.req.query('start_date');
+    const endDate = c.req.query('end_date');
+
+    // Validate date parameters
+    if (startDate && isNaN(Date.parse(startDate))) {
+        throw new ValidationError('Invalid start_date format. Use ISO 8601 (e.g., 2025-01-01)');
+    }
+    if (endDate && isNaN(Date.parse(endDate))) {
+        throw new ValidationError('Invalid end_date format. Use ISO 8601 (e.g., 2025-12-31)');
+    }
+
+    // Build date range query
+    const from = startDate ? new Date(startDate) : new Date(new Date().getFullYear(), 0, 1);
+    const to = endDate ? new Date(endDate) : new Date();
+
+    if (from > to) {
+        throw new ValidationError('start_date must be before end_date');
+    }
+
+    // Get deposits in range
+    const deposits = await db
+        .selectFrom('deposits')
+        .selectAll()
+        .where('savings_account_id', '=', accountId)
+        .where('deleted_at', 'is', null)
+        .where('deposit_date', '>=', from as any)
+        .where('deposit_date', '<=', to as any)
+        .where('status', '=', 'posted')
+        .orderBy('deposit_date', 'asc')
+        .execute();
+
+    // Get withdrawals in range
+    const withdrawals = await db
+        .selectFrom('withdrawals')
+        .selectAll()
+        .where('savings_account_id', '=', accountId)
+        .where('deleted_at', 'is', null)
+        .where('withdrawal_date', '>=', from as any)
+        .where('withdrawal_date', '<=', to as any)
+        .where('status', 'in', ['approved', 'completed'])
+        .orderBy('withdrawal_date', 'asc')
+        .execute();
+
+    // Get transfers in range
+    const transfers = await db
+        .selectFrom('internal_transfers')
+        .selectAll()
+        .where('deleted_at', 'is', null)
+        .where('transfer_date', '>=', from as any)
+        .where('transfer_date', '<=', to as any)
+        .where('status', '=', 'posted')
+        .where((eb) =>
+            eb.or([
+                eb('from_account_id', '=', accountId),
+                eb('to_account_id', '=', accountId),
+            ])
+        )
+        .orderBy('transfer_date', 'asc')
+        .execute();
+
+    // Get interest schedules
+    const interestEntries = await db
+        .selectFrom('interest_schedules')
+        .selectAll()
+        .where('savings_account_id', '=', accountId)
+        .where('period_end', '>=', from as any)
+        .where('period_end', '<=', to as any)
+        .where('is_posted', '=', true)
+        .orderBy('period_end', 'asc')
+        .execute();
+
+    // Build statement entries sorted by date
+    type StatementEntry = {
+        date: Date;
+        type: string;
+        reference: string;
+        description: string;
+        debit: string;
+        credit: string;
+    };
+
+    const entries: StatementEntry[] = [];
+
+    for (const d of deposits) {
+        entries.push({
+            date: new Date(d.deposit_date as any),
+            type: 'deposit',
+            reference: d.deposit_number,
+            description: d.description || `Deposit via ${d.payment_method}`,
+            debit: '',
+            credit: d.amount?.toString() ?? '0',
+        });
+    }
+
+    for (const w of withdrawals) {
+        entries.push({
+            date: new Date(w.withdrawal_date as any),
+            type: 'withdrawal',
+            reference: w.withdrawal_number,
+            description: w.description || `Withdrawal via ${w.payout_method}`,
+            debit: w.amount?.toString() ?? '0',
+            credit: '',
+        });
+    }
+
+    for (const t of transfers) {
+        const isOutgoing = t.from_account_id === accountId;
+        entries.push({
+            date: new Date(t.transfer_date as any),
+            type: isOutgoing ? 'transfer_out' : 'transfer_in',
+            reference: t.transfer_number,
+            description: t.description || (isOutgoing ? 'Transfer out' : 'Transfer in'),
+            debit: isOutgoing ? (t.amount?.toString() ?? '0') : '',
+            credit: isOutgoing ? '' : (t.amount?.toString() ?? '0'),
+        });
+    }
+
+    for (const ie of interestEntries) {
+        entries.push({
+            date: new Date(ie.period_end as any),
+            type: 'interest',
+            reference: `INT-${new Date(ie.period_end as any).toISOString().slice(0, 7)}`,
+            description: 'Interest posting',
+            debit: '',
+            credit: ie.interest_accrued?.toString() ?? '0',
+        });
+    }
+
+    // Sort by date
+    entries.sort((a, b) => a.date.getTime() - b.date.getTime());
+
+    // Calculate running balance
+    let runningBalance = new Decimal(0);
+    const statementLines = entries.map(e => {
+        const credit = e.credit ? new Decimal(e.credit) : new Decimal(0);
+        const debit = e.debit ? new Decimal(e.debit) : new Decimal(0);
+        runningBalance = runningBalance.plus(credit).minus(debit);
+        return {
+            ...e,
+            date: e.date.toISOString().split('T')[0],
+            balance: runningBalance.toFixed(2),
+        };
+    });
+
+    // Get member info
+    const member = await db
+        .selectFrom('members')
+        .select(['first_name', 'last_name', 'member_number'])
+        .where('id', '=', account.member_id)
+        .executeTakeFirst();
+
+    return c.json({
+        success: true,
+        data: {
+            account: {
+                id: account.id,
+                accountNumber: account.account_number,
+                status: account.status,
+                currentBalance: account.principal_balance?.toString(),
+            },
+            member: member ? {
+                name: `${member.first_name} ${member.last_name}`,
+                memberNumber: member.member_number,
+            } : null,
+            period: {
+                from: from.toISOString().split('T')[0],
+                to: to.toISOString().split('T')[0],
+            },
+            entries: statementLines,
+            summary: {
+                totalDeposits: deposits.reduce((s, d) => s + Number(d.amount ?? 0), 0).toFixed(2),
+                totalWithdrawals: withdrawals.reduce((s, w) => s + Number(w.amount ?? 0), 0).toFixed(2),
+                totalInterest: interestEntries.reduce((s, ie) => s + Number(ie.interest_accrued ?? 0), 0).toFixed(2),
+                closingBalance: account.principal_balance?.toString() ?? '0',
+                entryCount: entries.length,
+            },
+        },
+    });
 });
 
 // =============================================================================
@@ -1394,31 +1280,27 @@ const releaseLienSchema = z.object({
  * List standing instructions, optionally filtered by member_id
  */
 accountRoutes.get('/standing-instructions', enforcePermission('savings', 'read'), async (c) => {
-    try {
-        const db = c.get('db')!;
-        const memberId = c.req.query('member_id');
+    const db = c.get('db')!;
+    const memberId = c.req.query('member_id');
 
-        let query = db
-            .selectFrom('standing_instructions')
-            .selectAll()
-            .where('deleted_at', 'is', null);
+    let query = db
+        .selectFrom('standing_instructions')
+        .selectAll()
+        .where('deleted_at', 'is', null);
 
-        if (memberId) {
-            query = query.where('member_id', '=', memberId);
-        }
-
-        const instructions = await query
-            .orderBy('created_at', 'desc')
-            .execute();
-
-        return c.json({
-            success: true,
-            data: instructions,
-            meta: { count: instructions.length }
-        });
-    } catch (error) {
-        throw error;
+    if (memberId) {
+        query = query.where('member_id', '=', memberId);
     }
+
+    const instructions = await query
+        .orderBy('created_at', 'desc')
+        .execute();
+
+    return c.json({
+        success: true,
+        data: instructions,
+        meta: { count: instructions.length }
+    });
 });
 
 /**
@@ -1426,60 +1308,55 @@ accountRoutes.get('/standing-instructions', enforcePermission('savings', 'read')
  * Create a new standing instruction
  */
 accountRoutes.post('/standing-instructions', enforcePermission('savings', 'create'), validate(createStandingInstructionSchema), async (c) => {
-    try {
-        const data = getValidatedData<z.infer<typeof createStandingInstructionSchema>>(c);
-        const user = c.get('user');
-        const db = c.get('db')!;
-        const { schema_name } = c.get('tenant')!;
-        const accountRepo = new AccountRepository(schema_name);
+    const data = getValidatedData<z.infer<typeof createStandingInstructionSchema>>(c);
+    const { schema_name, db } = getTenantContext(c);
+    const user = c.get('user');
+    const accountRepo = new AccountRepository(schema_name);
 
-        // Verify source account exists
-        const sourceAccount = await accountRepo.findById(data.source_account_id);
-        if (!sourceAccount) {
-            throw new NotFoundError('Account', data.source_account_id);
-        }
-
-        // V-15: Verify source account belongs to the specified member
-        if (sourceAccount.member_id !== data.member_id) {
-            throw new ValidationError('Source account does not belong to the specified member');
-        }
-
-        // Verify destination account if provided
-        if (data.destination_account_id) {
-            const destAccount = await accountRepo.findById(data.destination_account_id);
-            if (!destAccount) {
-                throw new NotFoundError('Account', data.destination_account_id);
-            }
-        }
-
-        const instruction = await db
-            .insertInto('standing_instructions')
-            .values({
-                member_id: data.member_id,
-                instruction_type: data.instruction_type as any,
-                source_account_id: data.source_account_id,
-                destination_account_id: data.destination_account_id || null,
-                destination_external: data.destination_external ? JSON.stringify(data.destination_external) as any : null,
-                amount: String(data.amount) as any,
-                frequency: data.frequency as any,
-                start_date: new Date(data.start_date) as any,
-                end_date: data.end_date ? new Date(data.end_date) as any : null,
-                next_execution_date: new Date(data.start_date) as any,
-                max_executions: data.max_executions || null,
-                status: 'active' as any,
-                created_by: user?.id || null,
-            } as any)
-            .returningAll()
-            .executeTakeFirstOrThrow();
-
-        return c.json({
-            success: true,
-            data: instruction,
-            meta: { created: true }
-        }, 201);
-    } catch (error) {
-        throw error;
+    // Verify source account exists
+    const sourceAccount = await accountRepo.findById(data.source_account_id);
+    if (!sourceAccount) {
+        throw new NotFoundError('Account', data.source_account_id);
     }
+
+    // V-15: Verify source account belongs to the specified member
+    if (sourceAccount.member_id !== data.member_id) {
+        throw new ValidationError('Source account does not belong to the specified member');
+    }
+
+    // Verify destination account if provided
+    if (data.destination_account_id) {
+        const destAccount = await accountRepo.findById(data.destination_account_id);
+        if (!destAccount) {
+            throw new NotFoundError('Account', data.destination_account_id);
+        }
+    }
+
+    const instruction = await db
+        .insertInto('standing_instructions')
+        .values({
+            member_id: data.member_id,
+            instruction_type: data.instruction_type as any,
+            source_account_id: data.source_account_id,
+            destination_account_id: data.destination_account_id || null,
+            destination_external: data.destination_external ? JSON.stringify(data.destination_external) as any : null,
+            amount: String(data.amount) as any,
+            frequency: data.frequency as any,
+            start_date: new Date(data.start_date) as any,
+            end_date: data.end_date ? new Date(data.end_date) as any : null,
+            next_execution_date: new Date(data.start_date) as any,
+            max_executions: data.max_executions || null,
+            status: 'active' as any,
+            created_by: user?.id || null,
+        } as any)
+        .returningAll()
+        .executeTakeFirstOrThrow();
+
+    return c.json({
+        success: true,
+        data: instruction,
+        meta: { created: true }
+    }, 201);
 });
 
 /**
@@ -1487,44 +1364,40 @@ accountRoutes.post('/standing-instructions', enforcePermission('savings', 'creat
  * Update a standing instruction
  */
 accountRoutes.patch('/standing-instructions/:instructionId', enforcePermission('savings', 'update'), validate(updateStandingInstructionSchema), async (c) => {
-    try {
-        const { instructionId } = c.req.param();
-        const data = getValidatedData<z.infer<typeof updateStandingInstructionSchema>>(c);
-        const db = c.get('db')!;
+    const { instructionId } = c.req.param();
+    const data = getValidatedData<z.infer<typeof updateStandingInstructionSchema>>(c);
+    const db = c.get('db')!;
 
-        const existing = await db
-            .selectFrom('standing_instructions')
-            .selectAll()
-            .where('id', '=', instructionId)
-            .where('deleted_at', 'is', null)
-            .executeTakeFirst();
+    const existing = await db
+        .selectFrom('standing_instructions')
+        .selectAll()
+        .where('id', '=', instructionId)
+        .where('deleted_at', 'is', null)
+        .executeTakeFirst();
 
-        if (!existing) {
-            throw new NotFoundError('StandingInstruction', instructionId);
-        }
-
-        const updates: Record<string, any> = { updated_at: new Date() };
-        if (data.amount !== undefined) updates.amount = String(data.amount);
-        if (data.frequency !== undefined) updates.frequency = data.frequency;
-        if (data.end_date !== undefined) updates.end_date = data.end_date ? new Date(data.end_date) : null;
-        if (data.max_executions !== undefined) updates.max_executions = data.max_executions;
-        if (data.status !== undefined) updates.status = data.status;
-
-        const updated = await db
-            .updateTable('standing_instructions')
-            .set(updates as any)
-            .where('id', '=', instructionId)
-            .returningAll()
-            .executeTakeFirstOrThrow();
-
-        return c.json({
-            success: true,
-            data: updated,
-            meta: { updated: true }
-        });
-    } catch (error) {
-        throw error;
+    if (!existing) {
+        throw new NotFoundError('StandingInstruction', instructionId);
     }
+
+    const updates: Record<string, any> = { updated_at: new Date() };
+    if (data.amount !== undefined) updates.amount = String(data.amount);
+    if (data.frequency !== undefined) updates.frequency = data.frequency;
+    if (data.end_date !== undefined) updates.end_date = data.end_date ? new Date(data.end_date) : null;
+    if (data.max_executions !== undefined) updates.max_executions = data.max_executions;
+    if (data.status !== undefined) updates.status = data.status;
+
+    const updated = await db
+        .updateTable('standing_instructions')
+        .set(updates as any)
+        .where('id', '=', instructionId)
+        .returningAll()
+        .executeTakeFirstOrThrow();
+
+    return c.json({
+        success: true,
+        data: updated,
+        meta: { updated: true }
+    });
 });
 
 /**
@@ -1532,34 +1405,30 @@ accountRoutes.patch('/standing-instructions/:instructionId', enforcePermission('
  * Soft-delete (cancel) a standing instruction
  */
 accountRoutes.delete('/standing-instructions/:instructionId', enforcePermission('savings', 'update'), async (c) => {
-    try {
-        const { instructionId } = c.req.param();
-        const db = c.get('db')!;
+    const { instructionId } = c.req.param();
+    const db = c.get('db')!;
 
-        const existing = await db
-            .selectFrom('standing_instructions')
-            .selectAll()
-            .where('id', '=', instructionId)
-            .where('deleted_at', 'is', null)
-            .executeTakeFirst();
+    const existing = await db
+        .selectFrom('standing_instructions')
+        .selectAll()
+        .where('id', '=', instructionId)
+        .where('deleted_at', 'is', null)
+        .executeTakeFirst();
 
-        if (!existing) {
-            throw new NotFoundError('StandingInstruction', instructionId);
-        }
-
-        await db
-            .updateTable('standing_instructions')
-            .set({ deleted_at: new Date(), status: 'cancelled' } as any)
-            .where('id', '=', instructionId)
-            .execute();
-
-        return c.json({
-            success: true,
-            meta: { deleted: true }
-        });
-    } catch (error) {
-        throw error;
+    if (!existing) {
+        throw new NotFoundError('StandingInstruction', instructionId);
     }
+
+    await db
+        .updateTable('standing_instructions')
+        .set({ deleted_at: new Date(), status: 'cancelled' } as any)
+        .where('id', '=', instructionId)
+        .execute();
+
+    return c.json({
+        success: true,
+        meta: { deleted: true }
+    });
 });
 
 // =============================================================================
@@ -1571,47 +1440,42 @@ accountRoutes.delete('/standing-instructions/:instructionId', enforcePermission(
  * List liens on an account
  */
 accountRoutes.get('/:accountId/liens', enforcePermission('savings', 'read'), async (c) => {
-    try {
-        const { accountId } = c.req.param();
-        const db = c.get('db')!;
-        const { schema_name } = c.get('tenant')!;
-        const accountRepo = new AccountRepository(schema_name);
+    const { accountId } = c.req.param();
+    const { schema_name, db } = getTenantContext(c);
+    const accountRepo = new AccountRepository(schema_name);
 
-        const account = await accountRepo.findById(accountId);
-        if (!account) {
-            throw new NotFoundError('Account', accountId);
-        }
-
-        const statusFilter = c.req.query('status');
-
-        let query = db
-            .selectFrom('account_liens')
-            .selectAll()
-            .where('account_id', '=', accountId);
-
-        if (statusFilter) {
-            query = query.where('status', '=', statusFilter as any);
-        }
-
-        const liens = await query
-            .orderBy('placed_at', 'desc')
-            .execute();
-
-        const totalActive = liens
-            .filter(l => l.status === 'active')
-            .reduce((sum, l) => sum + Number(l.amount || 0), 0);
-
-        return c.json({
-            success: true,
-            data: liens,
-            meta: {
-                count: liens.length,
-                totalActiveLienAmount: totalActive,
-            }
-        });
-    } catch (error) {
-        throw error;
+    const account = await accountRepo.findById(accountId);
+    if (!account) {
+        throw new NotFoundError('Account', accountId);
     }
+
+    const statusFilter = c.req.query('status');
+
+    let query = db
+        .selectFrom('account_liens')
+        .selectAll()
+        .where('account_id', '=', accountId);
+
+    if (statusFilter) {
+        query = query.where('status', '=', statusFilter as any);
+    }
+
+    const liens = await query
+        .orderBy('placed_at', 'desc')
+        .execute();
+
+    const totalActive = liens
+        .filter(l => l.status === 'active')
+        .reduce((sum, l) => sum + Number(l.amount || 0), 0);
+
+    return c.json({
+        success: true,
+        data: liens,
+        meta: {
+            count: liens.length,
+            totalActiveLienAmount: totalActive,
+        }
+    });
 });
 
 /**
@@ -1619,58 +1483,53 @@ accountRoutes.get('/:accountId/liens', enforcePermission('savings', 'read'), asy
  * Place a lien on an account
  */
 accountRoutes.post('/liens', enforcePermission('savings', 'update'), validate(placeLienSchema), async (c) => {
-    try {
-        const data = getValidatedData<z.infer<typeof placeLienSchema>>(c);
-        const user = c.get('user');
-        const db = c.get('db')!;
-        const { schema_name } = c.get('tenant')!;
-        const accountRepo = new AccountRepository(schema_name);
+    const data = getValidatedData<z.infer<typeof placeLienSchema>>(c);
+    const { schema_name, db } = getTenantContext(c);
+    const user = c.get('user');
+    const accountRepo = new AccountRepository(schema_name);
 
-        // Verify account exists
-        const account = await accountRepo.findById(data.account_id);
-        if (!account) {
-            throw new NotFoundError('Account', data.account_id);
-        }
-
-        // Check that lien does not exceed account balance
-        const currentBalance = Number(account.principal_balance || 0);
-        const existingLiens = await db
-            .selectFrom('account_liens')
-            .selectAll()
-            .where('account_id', '=', data.account_id)
-            .where('status', '=', 'active')
-            .execute();
-
-        const totalExistingLiens = existingLiens.reduce((sum, l) => sum + Number(l.amount || 0), 0);
-        if (totalExistingLiens + data.amount > currentBalance) {
-            throw new ValidationError(
-                `Lien amount would exceed available balance. Balance: ${currentBalance}, existing liens: ${totalExistingLiens}, requested: ${data.amount}`
-            );
-        }
-
-        const lien = await db
-            .insertInto('account_liens')
-            .values({
-                account_id: data.account_id,
-                amount: String(data.amount) as any,
-                reason: data.reason,
-                lien_type: data.lien_type as any,
-                placed_by: user?.id || 'system',
-                placed_at: new Date() as any,
-                related_loan_id: data.related_loan_id || null,
-                status: 'active' as any,
-            } as any)
-            .returningAll()
-            .executeTakeFirstOrThrow();
-
-        return c.json({
-            success: true,
-            data: lien,
-            meta: { created: true }
-        }, 201);
-    } catch (error) {
-        throw error;
+    // Verify account exists
+    const account = await accountRepo.findById(data.account_id);
+    if (!account) {
+        throw new NotFoundError('Account', data.account_id);
     }
+
+    // Check that lien does not exceed account balance
+    const currentBalance = Number(account.principal_balance || 0);
+    const existingLiens = await db
+        .selectFrom('account_liens')
+        .selectAll()
+        .where('account_id', '=', data.account_id)
+        .where('status', '=', 'active')
+        .execute();
+
+    const totalExistingLiens = existingLiens.reduce((sum, l) => sum + Number(l.amount || 0), 0);
+    if (totalExistingLiens + data.amount > currentBalance) {
+        throw new ValidationError(
+            `Lien amount would exceed available balance. Balance: ${currentBalance}, existing liens: ${totalExistingLiens}, requested: ${data.amount}`
+        );
+    }
+
+    const lien = await db
+        .insertInto('account_liens')
+        .values({
+            account_id: data.account_id,
+            amount: String(data.amount) as any,
+            reason: data.reason,
+            lien_type: data.lien_type as any,
+            placed_by: user?.id || 'system',
+            placed_at: new Date() as any,
+            related_loan_id: data.related_loan_id || null,
+            status: 'active' as any,
+        } as any)
+        .returningAll()
+        .executeTakeFirstOrThrow();
+
+    return c.json({
+        success: true,
+        data: lien,
+        meta: { created: true }
+    }, 201);
 });
 
 /**
@@ -1678,50 +1537,46 @@ accountRoutes.post('/liens', enforcePermission('savings', 'update'), validate(pl
  * Release a lien on an account
  */
 accountRoutes.patch('/liens/:lienId/release', enforcePermission('savings', 'update'), validate(releaseLienSchema), async (c) => {
-    try {
-        const { lienId } = c.req.param();
-        const data = getValidatedData<z.infer<typeof releaseLienSchema>>(c);
-        const user = c.get('user');
-        const db = c.get('db')!;
+    const { lienId } = c.req.param();
+    const data = getValidatedData<z.infer<typeof releaseLienSchema>>(c);
+    const user = c.get('user');
+    const db = c.get('db')!;
 
-        const existing = await db
-            .selectFrom('account_liens')
-            .selectAll()
-            .where('id', '=', lienId)
-            .executeTakeFirst();
+    const existing = await db
+        .selectFrom('account_liens')
+        .selectAll()
+        .where('id', '=', lienId)
+        .executeTakeFirst();
 
-        if (!existing) {
-            throw new NotFoundError('AccountLien', lienId);
-        }
-
-        if (existing.status !== 'active') {
-            return c.json({
-                success: false,
-                error: { code: 'INVALID_STATUS', message: 'Lien is not active' }
-            }, 400);
-        }
-
-        const released = await db
-            .updateTable('account_liens')
-            .set({
-                status: 'released',
-                released_at: new Date(),
-                released_by: user?.id || null,
-                release_reason: data.release_reason,
-                updated_at: new Date(),
-            } as any)
-            .where('id', '=', lienId)
-            .returningAll()
-            .executeTakeFirstOrThrow();
-
-        return c.json({
-            success: true,
-            data: released,
-            meta: { released: true }
-        });
-    } catch (error) {
-        throw error;
+    if (!existing) {
+        throw new NotFoundError('AccountLien', lienId);
     }
+
+    if (existing.status !== 'active') {
+        return c.json({
+            success: false,
+            error: { code: 'INVALID_STATUS', message: 'Lien is not active' }
+        }, 400);
+    }
+
+    const released = await db
+        .updateTable('account_liens')
+        .set({
+            status: 'released',
+            released_at: new Date(),
+            released_by: user?.id || null,
+            release_reason: data.release_reason,
+            updated_at: new Date(),
+        } as any)
+        .where('id', '=', lienId)
+        .returningAll()
+        .executeTakeFirstOrThrow();
+
+    return c.json({
+        success: true,
+        data: released,
+        meta: { released: true }
+    });
 });
 
 // =============================================================================
@@ -1733,36 +1588,32 @@ accountRoutes.patch('/liens/:lienId/release', enforcePermission('savings', 'upda
  * List interest rate configurations
  */
 accountRoutes.get('/interest-rate-config', enforcePermission('savings', 'read'), async (c) => {
-    try {
-        const db = c.get('db')!;
-        const rateType = c.req.query('rate_type');
-        const currentOnly = c.req.query('current') === 'true';
+    const db = c.get('db')!;
+    const rateType = c.req.query('rate_type');
+    const currentOnly = c.req.query('current') === 'true';
 
-        let query = db
-            .selectFrom('interest_rate_configuration')
-            .selectAll();
+    let query = db
+        .selectFrom('interest_rate_configuration')
+        .selectAll();
 
-        if (rateType) {
-            query = query.where('rate_type', '=', rateType as any);
-        }
-
-        if (currentOnly) {
-            query = query.where('is_current', '=', true);
-        }
-
-        const configs = await query
-            .orderBy('rate_type', 'asc')
-            .orderBy('effective_from', 'desc')
-            .execute();
-
-        return c.json({
-            success: true,
-            data: configs,
-            meta: { count: configs.length }
-        });
-    } catch (error) {
-        throw error;
+    if (rateType) {
+        query = query.where('rate_type', '=', rateType as any);
     }
+
+    if (currentOnly) {
+        query = query.where('is_current', '=', true);
+    }
+
+    const configs = await query
+        .orderBy('rate_type', 'asc')
+        .orderBy('effective_from', 'desc')
+        .execute();
+
+    return c.json({
+        success: true,
+        data: configs,
+        meta: { count: configs.length }
+    });
 });
 
 export default accountRoutes;

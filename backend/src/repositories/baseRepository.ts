@@ -33,6 +33,23 @@ export abstract class BaseRepository {
     }
 
     /**
+     * Return the current timestamp.
+     * Centralises `new Date()` so update helpers don't re-implement it.
+     */
+    protected now(): Date {
+        return new Date();
+    }
+
+    /**
+     * Merge `updated_at` into an update payload.
+     * Replaces the `{ ...updates, updated_at: new Date() }` pattern that
+     * appeared in every repository update method.
+     */
+    protected touchUpdated<T extends object>(updates: T): T & { updated_at: Date } {
+        return { ...updates, updated_at: this.now() };
+    }
+
+    /**
      * Wraps database operations with error handling
      * Converts database errors to DatabaseError instances
      */
